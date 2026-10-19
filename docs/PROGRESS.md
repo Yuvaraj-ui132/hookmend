@@ -57,3 +57,10 @@
 - Ran `npm test`: 34/34 tests passing (17 unit, 17 integration)
 - Ran `npm run exit-test:phase1`: 25/25 HTTP 200, 5/5 deduplicated:true, 20/20 events in DB with status "received"
 - Phase 1 successfully completed. Next: Phase 2 (Queue, Validation, Delivery, Quarantine)
+
+## STEP 1 — Tests First (Phase 2) [DONE]
+- Added unit tests for diff, fingerprint, validate in packages/common/test/
+- Added unit tests for delivery, processor, reconcile in packages/worker/test/
+- Added integration tests for admin REST (auth, pagination, requeue, secrets isolation) in packages/api/test/
+- Test status: 34 Phase 1 tests pass, 12 new Phase 2 tests failing (tests-first)
+- Next: STEP 2 — create packages/common and migrate shared code

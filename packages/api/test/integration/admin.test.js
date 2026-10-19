@@ -53,7 +53,7 @@ describe('Admin REST API', () => {
     it('rejects requests with missing Authorization header with 401 UNAUTHORIZED', async () => {
       const res = await request.get('/api/sources');
       expect(res.status).toBe(401);
-      expect(res.body.error.code).toBe('UNAUTHORIZED');
+      expect(res.body.error).toBe('UNAUTHORIZED');
     });
 
     it('rejects requests with invalid Bearer token with 401 UNAUTHORIZED', async () => {
@@ -61,7 +61,7 @@ describe('Admin REST API', () => {
         .get('/api/sources')
         .set('Authorization', 'Bearer wrong-token');
       expect(res.status).toBe(401);
-      expect(res.body.error.code).toBe('UNAUTHORIZED');
+      expect(res.body.error).toBe('UNAUTHORIZED');
     });
 
     it('accepts requests with valid Bearer token', async () => {
@@ -194,7 +194,7 @@ describe('Admin REST API', () => {
         .set('Authorization', `Bearer ${ADMIN_TOKEN}`);
 
       expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('INVALID_ID');
+      expect(res.body.error).toBe('INVALID_ID');
     });
 
     it('returns 404 NOT_FOUND for non-existent event', async () => {
@@ -204,7 +204,7 @@ describe('Admin REST API', () => {
         .set('Authorization', `Bearer ${ADMIN_TOKEN}`);
 
       expect(res.status).toBe(404);
-      expect(res.body.error.code).toBe('NOT_FOUND');
+      expect(res.body.error).toBe('NOT_FOUND');
     });
 
     it('returns 409 INVALID_STATE when event is not failed or dead', async () => {
@@ -218,7 +218,7 @@ describe('Admin REST API', () => {
         .set('Authorization', `Bearer ${ADMIN_TOKEN}`);
 
       expect(res.status).toBe(409);
-      expect(res.body.error.code).toBe('INVALID_STATE');
+      expect(res.body.error).toBe('INVALID_STATE');
     });
 
     it('requeues a dead or failed event: transitions to requeue_pending, unsets expireAt, audits, enqueues', async () => {

@@ -10,6 +10,7 @@ import { requestIdMiddleware } from './middleware/requestId.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { createHealthRouter } from './routes/health.js';
 import { createIngestRouter } from './routes/ingest.js';
+import { createAdminRouter } from './routes/admin.js';
 
 /**
  * @param {{ db: import('mongodb').Db, queue: object, config: object, logger?: object }} deps
@@ -27,6 +28,7 @@ export function createApp({ db, queue, config }) {
   // Routes
   app.use(createHealthRouter({ db, queue, config }));
   app.use(createIngestRouter({ db, queue, config }));
+  app.use('/api', express.json(), createAdminRouter({ db, queue, config }));
 
   // Central error handler (must be last)
   app.use(errorHandler);

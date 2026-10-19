@@ -94,3 +94,12 @@
 - Created worker main.js with reconciliation schedule and graceful shutdown
 - Test status: 67 tests passing (34 Phase 1 + 18 common + 15 worker)
 - Next: STEP 6 — seed, receiver, admin REST
+
+## STEP 6 — Seed, Receiver, and Admin REST [DONE]
+- Extended infra/seed/seed.js with active schema v1 for sim-payments / payment.created (strict) and github-main / push (permissive)
+- Implemented packages/simulator/src/receiver.js with /receive, /__stats, /__mode (ok, fail503, fail400, timeout), and exportable startReceiver
+- Implemented packages/api/src/middleware/adminAuth.js (timing-safe Bearer token authentication)
+- Implemented packages/api/src/routes/admin.js (sources, events with pagination, schemas, and POST /api/events/:id/requeue)
+- Mounted admin router under /api in server.js
+- Test status: 79/79 tests passing (9 test suites)
+- Next: STEP 7 — Phase 2 Exit Test and SPEC updates

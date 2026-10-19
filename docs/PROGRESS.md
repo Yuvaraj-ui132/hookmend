@@ -85,3 +85,12 @@
 - Wired packages/api/src/main.js to real BullMQ queue factory while keeping stub.js for test injection
 - Test status: 52 tests passing (34 Phase 1 + 18 common); exit-test:phase1 PASS
 - Next: STEP 5 — worker (processor, delivery, reconciliation, analyze-drift stub)
+
+## STEP 5 — Worker Implementation [DONE]
+- Created packages/worker (@hookmend/worker) with delivery classification and exponential backoff
+- Implemented processEvent with conditional updates, terminal status guards, quarantine, and audit logging
+- Implemented reconcileOnce for recovering unpicked received and requeue_pending events
+- Implemented createProcessEventWorker (with worker.on('failed') safety net) and createAnalyzeDriftWorker stub
+- Created worker main.js with reconciliation schedule and graceful shutdown
+- Test status: 67 tests passing (34 Phase 1 + 18 common + 15 worker)
+- Next: STEP 6 — seed, receiver, admin REST

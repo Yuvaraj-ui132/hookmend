@@ -70,3 +70,10 @@
 - Updated packages/api to depend on @hookmend/common and re-export shared modules
 - Gate verified: 34/34 Phase 1 unit + integration tests pass, npm run exit-test:phase1 PASS
 - Next: STEP 3 — implement drift diff, fingerprint, and Ajv validate in common
+
+## STEP 3 — Drift and Validation [DONE]
+- Implemented computeStructuralDiff in packages/common/src/diff.js (value-free, max depth 5, integer accepted for number)
+- Implemented computeFingerprint in packages/common/src/fingerprint.js (canonical JSON with normalized key/array sorting)
+- Implemented validatePayload in packages/common/src/validate.js (Ajv draft-07, allErrors:true, strict:false, value-free errors capped at 20)
+- Test status: 18/18 common tests passing
+- Next: STEP 4 — BullMQ producer and API wiring

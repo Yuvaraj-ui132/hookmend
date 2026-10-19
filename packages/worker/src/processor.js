@@ -177,7 +177,9 @@ export async function processEvent({ job, db, deps }) {
     deliveryErr = err;
   }
 
-  const { delivered, retryable } = classifyDeliveryResponse(deliveryStatus);
+  const { delivered, retryable } = classifyDeliveryResponse(deliveryStatus, {
+    networkError: Boolean(deliveryErr),
+  });
 
   if (delivered) {
     // Delivered 2xx
@@ -217,7 +219,12 @@ export async function processEvent({ job, db, deps }) {
 
   // Not delivered
   const isLastAttempt = currentAttempt >= maxAttempts;
-  const errorMsg = (deliveryErr ? deliveryErr.message : `HTTP ${deliveryStatus}`).slice(0, 200);
+  const rawMsg = deliveryErr ? deliveryErr.message : `HTTP ${deliveryStatus}`;
+  const errorMsg = rawMsg.replace(/https?:\/\/[^\s]+/gi, '[redacted]').slice(0, 200);
+
+  const errorCode = deliveryErr
+    ? (deliveryErr.cause?.code || deliveryErr.code || deliveryErr.cause?.name || deliveryErr.name || 'NETWORK_ERROR')
+    : (isLastAttempt ? 'DOWNSTREAM_EXHAUSTED' : (retryable ? 'DOWNSTREAM_ERROR' : 'NON_RETRYABLE_ERROR'));
 
   if (retryable && !isLastAttempt) {
     // Retryable failure, attempts remain -> Mark failed, throw for BullMQ backoff retry
@@ -229,7 +236,7 @@ export async function processEvent({ job, db, deps }) {
           status: EVENT_STATUS.FAILED,
           downstreamStatus: deliveryStatus,
           lastError: {
-            code: 'DOWNSTREAM_ERROR',
+            code: errorCode,
             message: errorMsg,
             at: failedAt,
           },
@@ -237,6 +244,11 @@ export async function processEvent({ job, db, deps }) {
         },
         $inc: { deliveryAttempts: 1 },
       }
+    );
+
+    logger.warn?.(
+      { eventId: event.eventId, downstreamStatus: deliveryStatus, err: errorCode },
+      deliveryErr ? 'Downstream delivery network failure; will retry' : 'Downstream delivery retryable failure; will retry'
     );
 
     throw deliveryErr || new Error(`Downstream returned retryable HTTP ${deliveryStatus}`);
@@ -255,7 +267,7 @@ export async function processEvent({ job, db, deps }) {
         downstreamStatus: deliveryStatus,
         expireAt,
         lastError: {
-          code: isLastAttempt ? 'DOWNSTREAM_EXHAUSTED' : 'NON_RETRYABLE_ERROR',
+          code: errorCode,
           message: errorMsg,
           at: deadAt,
         },
@@ -265,6 +277,10 @@ export async function processEvent({ job, db, deps }) {
     }
   );
 
+  const failureReason = isLastAttempt
+    ? 'attempts_exhausted'
+    : (deliveryErr ? 'network_error' : 'non_retryable_client_error');
+
   await writeAuditLog(db, {
     actor: 'worker:process-event',
     action: 'event.dead',
@@ -273,14 +289,22 @@ export async function processEvent({ job, db, deps }) {
     detail: {
       downstreamStatus: deliveryStatus,
       attempts: currentAttempt,
-      reason: isLastAttempt ? 'attempts_exhausted' : 'non_retryable_client_error',
+      reason: failureReason,
+      code: errorCode,
     },
     timestamp: deadAt,
   });
 
-  throw new UnrecoverableError(
-    isLastAttempt
-      ? `Downstream attempts exhausted: ${errorMsg}`
-      : `Non-retryable downstream client error: ${errorMsg}`
+  const failureMessage = isLastAttempt
+    ? `Downstream attempts exhausted: ${errorMsg}`
+    : (deliveryErr
+        ? `Downstream network error: ${errorMsg}`
+        : `Non-retryable downstream client error: ${errorMsg}`);
+
+  logger.error?.(
+    { eventId: event.eventId, downstreamStatus: deliveryStatus, code: errorCode },
+    failureMessage
   );
+
+  throw new UnrecoverableError(failureMessage);
 }

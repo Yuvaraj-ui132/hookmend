@@ -354,4 +354,109 @@ describe('processEvent', () => {
     expect(updated.schemaVersion).toBeNull();
     expect(fakeLogger.warn).toHaveBeenCalled();
   });
+
+  it('sets status failed and throws for retry when fetch throws on non-last attempt', async () => {
+    const eventId = 'evt_fetch_err_retry';
+    const insertRes = await db.collection('events').insertOne({
+      sourceId,
+      sourceSlug: 'sim-payments',
+      eventId,
+      eventType: 'payment.created',
+      status: 'received',
+      rawBodyHash: 'hash_err_1',
+      payload: { event: 'payment.created', amount: 100, orderId: 'ord-1' },
+      headers: {},
+      deliveryAttempts: 0,
+      receivedAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const netErr = new TypeError('fetch failed');
+    netErr.cause = { code: 'ECONNREFUSED' };
+    const fakeFetch = vi.fn().mockRejectedValue(netErr);
+    const fakeQueue = { enqueue: vi.fn() };
+    const fakeLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const job = {
+      id: `${eventId}_v0`,
+      data: { eventObjectId: insertRes.insertedId.toString(), eventId },
+      opts: { attempts: 3 },
+      attemptsMade: 0, // 1st attempt out of 3
+    };
+
+    await expect(
+      processEvent({
+        job,
+        db,
+        deps: {
+          fetch: fakeFetch,
+          queue: fakeQueue,
+          logger: fakeLogger,
+          config: { EVENT_TTL_DAYS: 14, DOWNSTREAM_TIMEOUT_MS: 5000 },
+        },
+      })
+    ).rejects.toThrow();
+
+    const updated = await db.collection('events').findOne({ _id: insertRes.insertedId });
+    expect(updated.status).toBe('failed');
+    expect(updated.deliveryAttempts).toBe(1);
+    expect(updated.lastError.code).toBe('ECONNREFUSED');
+    expect(updated.expireAt).toBeUndefined();
+  });
+
+  it('sets status dead and sets expireAt when fetch throws on last attempt', async () => {
+    const eventId = 'evt_fetch_err_dead';
+    const insertRes = await db.collection('events').insertOne({
+      sourceId,
+      sourceSlug: 'sim-payments',
+      eventId,
+      eventType: 'payment.created',
+      status: 'failed',
+      rawBodyHash: 'hash_err_2',
+      payload: { event: 'payment.created', amount: 100, orderId: 'ord-1' },
+      headers: {},
+      deliveryAttempts: 2,
+      receivedAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const netErr = new TypeError('fetch failed');
+    netErr.cause = { code: 'ETIMEDOUT' };
+    const fakeFetch = vi.fn().mockRejectedValue(netErr);
+    const fakeQueue = { enqueue: vi.fn() };
+    const fakeLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const job = {
+      id: `${eventId}_v0`,
+      data: { eventObjectId: insertRes.insertedId.toString(), eventId },
+      opts: { attempts: 3 },
+      attemptsMade: 2, // 3rd attempt out of 3
+    };
+
+    await expect(
+      processEvent({
+        job,
+        db,
+        deps: {
+          fetch: fakeFetch,
+          queue: fakeQueue,
+          logger: fakeLogger,
+          config: { EVENT_TTL_DAYS: 14, DOWNSTREAM_TIMEOUT_MS: 5000 },
+        },
+      })
+    ).rejects.toThrow();
+
+    const updated = await db.collection('events').findOne({ _id: insertRes.insertedId });
+    expect(updated.status).toBe('dead');
+    expect(updated.deliveryAttempts).toBe(3);
+    expect(updated.lastError.code).toBe('ETIMEDOUT');
+    expect(updated.expireAt).toBeInstanceOf(Date);
+
+    const audit = await db.collection('audit_log').findOne({
+      entityId: insertRes.insertedId,
+      action: 'event.dead',
+    });
+    expect(audit).not.toBeNull();
+    expect(audit.detail.reason).toBe('attempts_exhausted');
+  });
 });

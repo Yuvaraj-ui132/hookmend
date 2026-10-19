@@ -32,6 +32,13 @@ describe('classifyDeliveryResponse', () => {
     expect(classifyDeliveryResponse(429)).toEqual({ delivered: false, retryable: true });
   });
 
+  it('classifies status 0, missing status, and network errors as retryable', () => {
+    expect(classifyDeliveryResponse(0)).toEqual({ delivered: false, retryable: true });
+    expect(classifyDeliveryResponse()).toEqual({ delivered: false, retryable: true });
+    expect(classifyDeliveryResponse(0, { networkError: true })).toEqual({ delivered: false, retryable: true });
+    expect(classifyDeliveryResponse(undefined, { networkError: true })).toEqual({ delivered: false, retryable: true });
+  });
+
   it('classifies client errors other than 408 and 429 as non-retryable', () => {
     expect(classifyDeliveryResponse(400)).toEqual({ delivered: false, retryable: false });
     expect(classifyDeliveryResponse(401)).toEqual({ delivered: false, retryable: false });
@@ -94,5 +101,35 @@ describe('deliverEvent', () => {
         timeoutMs: 5000,
       })
     ).rejects.toThrow();
+  });
+
+  it('handles thrown TypeError("fetch failed") with a cause code', async () => {
+    const err = new TypeError('fetch failed');
+    err.cause = { code: 'ECONNREFUSED' };
+    const fakeFetch = vi.fn().mockRejectedValue(err);
+
+    const event = { eventId: 'evt_conn_err', eventType: 'payment.created', payload: {} };
+    const source = { downstreamUrl: 'http://downstream.test/webhook' };
+
+    let caught;
+    try {
+      await deliverEvent({
+        event,
+        source,
+        attempt: 1,
+        fetch: fakeFetch,
+        timeoutMs: 5000,
+      });
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeDefined();
+    expect(caught.message).toBe('fetch failed');
+    expect(caught.cause?.code).toBe('ECONNREFUSED');
+    expect(classifyDeliveryResponse(0, { networkError: Boolean(caught) })).toEqual({
+      delivered: false,
+      retryable: true,
+    });
   });
 });

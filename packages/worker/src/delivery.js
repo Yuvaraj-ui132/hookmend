@@ -20,12 +20,17 @@ export function computeBackoff(attemptsMade, baseMs = 1000, maxMs = 30000) {
 }
 
 /**
- * Classifies HTTP response status code.
+ * Classifies HTTP response status code and network delivery errors.
  *
- * @param {number} status
+ * @param {number} [status]
+ * @param {object} [options]
+ * @param {boolean} [options.networkError=false]
  * @returns {{ delivered: boolean, retryable: boolean }}
  */
-export function classifyDeliveryResponse(status) {
+export function classifyDeliveryResponse(status, { networkError = false } = {}) {
+  if (networkError || !status || status === 0) {
+    return { delivered: false, retryable: true };
+  }
   if (status >= 200 && status < 300) {
     return { delivered: true, retryable: false };
   }

@@ -116,3 +116,10 @@
   - Scenario G: Admin REST requeue dead event -> requeue_pending -> delivered [PASS]
 - Updated docs/SPEC.md: added decision log entries for D1-D20, updated repository structure, documented at-least-once delivery contract and single-worker reconciliation limitation
 - Phase 2 complete. Next: Phase 3 (Drift Analysis, AI Layer, Proposals, Dashboard, SSE)
+
+## Bugfix: Network Error Delivery Classification & Scenario H [DONE]
+- Fixed delivery.js to treat missing/zero status or networkError as retryable; updated processor.js to pass networkError and store cause code in lastError.code without URLs
+- Added unit tests for status 0, TypeError('fetch failed') with cause code, and processor thrown fetch errors (failed retry vs dead on last attempt)
+- Added Scenario H to exit-test-phase2 (receiver temporarily stopped -> retried on network error -> delivered with deliveryAttempts >= 2)
+- Test status: 83/83 unit/integration tests passing; exit-test:phase1 PASS; exit-test:phase2 Scenarios A-H PASS
+

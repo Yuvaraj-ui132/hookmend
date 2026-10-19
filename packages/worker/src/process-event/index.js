@@ -15,6 +15,7 @@ import {
   writeAuditLog,
 } from '@hookmend/common';
 import { processEvent } from '../processor.js';
+import { computeBackoff } from '../delivery.js';
 
 export function createProcessEventWorker({ db, queue, config, logger }) {
   const redisUrl = config.REDIS_URL || process.env.REDIS_URL || 'redis://localhost:6379';
@@ -44,6 +45,13 @@ export function createProcessEventWorker({ db, queue, config, logger }) {
       connection: redisConnection,
       prefix,
       concurrency,
+      settings: {
+        backoffStrategy(attemptsMade) {
+          const baseMs = parseInt(config?.PROCESS_EVENT_BACKOFF_BASE_MS || '1000', 10);
+          const maxMs = parseInt(config?.PROCESS_EVENT_BACKOFF_MAX_MS || '30000', 10);
+          return computeBackoff(attemptsMade, baseMs, maxMs);
+        },
+      },
     }
   );
 

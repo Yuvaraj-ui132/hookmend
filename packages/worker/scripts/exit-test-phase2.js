@@ -100,7 +100,7 @@ async function main() {
   await createIndexes(db);
 
   // ── 2. Start Receiver ─────────────────────────────────────────────────────
-  const receiver = await startReceiver({ port: 0 });
+  let receiver = await startReceiver({ port: 0 });
   console.log(`[exit-test-phase2] Mock Receiver listening on port ${receiver.port}`);
 
   // ── 3. Seed Source and Schema ─────────────────────────────────────────────
@@ -162,7 +162,7 @@ async function main() {
     LOG_LEVEL: 'silent',
     ADMIN_API_TOKEN,
     PROCESS_EVENT_ATTEMPTS: 3,
-    PROCESS_EVENT_BACKOFF_BASE_MS: 50,
+    PROCESS_EVENT_BACKOFF_BASE_MS: 500,
     PROCESS_EVENT_BACKOFF_MAX_MS: 500,
     DOWNSTREAM_TIMEOUT_MS: 2000,
     RECONCILE_INTERVAL_MS: 60000,
@@ -464,6 +464,37 @@ async function main() {
       scenario: 'Scenario G: Admin REST requeue dead event -> requeue_pending -> delivered',
       pass: passG,
       detail: `api status: ${requeueRes.status}, event status: ${updatedD?.status}, receiver requests: ${statsG.totalRequests}/1`,
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario H: Start receiver stopped -> retried -> delivered with attempts >= 2
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[Scenario H] Testing delivery retry on network error with receiver temporarily stopped...');
+    const receiverPort = receiver.port;
+    await receiver.close();
+
+    const delIdH = `evt_h_${randomUUID().slice(0, 6)}`;
+    const bodyH = buildPaymentEvent({ drift: false });
+    await postIngest(bodyH, delIdH);
+
+    // Wait about 1 second before starting the receiver
+    await new Promise((r) => setTimeout(r, 1000));
+    receiver = await startReceiver({ port: receiverPort });
+    receiver.setMode('ok');
+
+    await waitForCondition(async () => {
+      const doc = await db.collection('events').findOne({ eventId: delIdH });
+      return doc?.status === 'delivered';
+    }, 15000);
+
+    const docH = await db.collection('events').findOne({ eventId: delIdH });
+    const statsH = receiver.getStats();
+
+    const passH = docH?.status === 'delivered' && (docH?.deliveryAttempts ?? 0) >= 2;
+    results.push({
+      scenario: 'Scenario H: Receiver stopped initially -> retried on network error -> delivered with deliveryAttempts >= 2',
+      pass: passH,
+      detail: `status: ${docH?.status}, deliveryAttempts: ${docH?.deliveryAttempts}, receiver reqs: ${statsH.totalRequests}`,
     });
   } finally {
     // ── Teardown ────────────────────────────────────────────────────────────

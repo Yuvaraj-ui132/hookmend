@@ -36,6 +36,7 @@ export const DEFAULT_CONFIG = {
 export const DEFAULT_JOB_OPTIONS = {
   PROCESS_EVENT: {
     attempts: DEFAULT_CONFIG.PROCESS_EVENT_ATTEMPTS,
+    backoff: { type: 'custom' },
     removeOnComplete: { count: 1000, age: 86400 },
     removeOnFail: { count: 5000, age: 604800 },
   },

@@ -201,7 +201,8 @@ export function createIngestRouter({ db, queue, config }) {
               'process-event',
               'process-event',
               {
-                eventId: insertedId.toString(),
+                eventObjectId: insertedId.toString(),
+                eventId: verification.eventId,
                 sourceId: source._id.toString(),
                 sourceSlug,
                 eventType,

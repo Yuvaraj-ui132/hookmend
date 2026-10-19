@@ -123,6 +123,27 @@ Key responsibilities:
 | **[Phase 1] /health redis field** | Returns `"redis": "not_configured"` in Phase 1 | Omit redis field or return "disconnected" | Communicates intentional Phase 1 scope; Phase 2 BullMQ integration will return actual Redis status. | Deviates slightly from §7 shape which shows `"redis": "connected"`; Phase 2 will correct this. |
 | **[Phase 1] expireAt omitted until terminal status** | `expireAt` field is ENTIRELY OMITTED from event documents until status becomes `delivered` or `dead` | Store `expireAt: null` | MongoDB TTL index with `expireAfterSeconds: 0` fires on documents where `expireAt <= Date.now()`. Storing `null` would require a sparse index or special handling. Omitting the field entirely prevents accidental TTL deletion. | `expireAt` sparse TTL index (with `sparse: true`) only processes documents where the field exists. Phase 2 worker must set `expireAt = new Date(Date.now() + EVENT_TTL_DAYS * 86400000)` on terminal transitions. |
 | **[Phase 3 Note] analyze-drift jobId** | `analyze-drift` jobId for re-analysis attempts MUST include an attempt counter (e.g. `${fingerprint}_a${attemptN}`) to prevent BullMQ from deduplicating re-analysis after a rejected proposal. | `${fingerprint}` only | BullMQ treats identical jobIds as deduplicated. A rejected proposal must allow a fresh analysis run, which requires a unique jobId. | Phase 3 implementation must track attempt count per fingerprint, likely in the `proposals` document. |
+| **[Phase 2] D1 Shared Packages** | Add `@hookmend/common` and `@hookmend/worker`; move logger, db client, constants, queue factory, audit helper, diff, and fingerprint into common. | Keep all shared code duplicated or in API | Clear package boundaries allow independent deployment and horizontal scaling of workers. | API and worker both depend on `@hookmend/common`. |
+| **[Phase 2] D2 Event Statuses** | Standardized status enum: `received`, `processing`, `delivered`, `quarantined`, `failed`, `dead`, `requeue_pending`. | Ad-hoc statuses | Explicit status finite state machine prevents illegal state transitions. | Centralized in `EVENT_STATUS` constants. |
+| **[Phase 2] D3 Event Fields** | Worker adds `schemaVersion`, `validated`, `lastError`, `quarantinedAt`, `processedAt`, `downstreamStatus`, `requeueSeq`, `validationErrors` (max 20). `expireAt` set ONLY on terminal `delivered` or `dead`. | Store nulls or raw error stacks | Value-free errors prevent data leakage; conditional TTL prevents premature event pruning. | Implemented in processor and schema validator. |
+| **[Phase 2] D4 Conditional State Updates** | Updates use `updateOne` with status filter (`status: { $in: [...] }`) to prevent overwriting terminal states; already terminal/quarantined events skipped. | Unconditional updates | Prevents race conditions from overwriting `delivered` or `dead` states. | Verified in concurrency tests. |
+| **[Phase 2] D5 No Active Schema Delivery** | If no active schema exists for `(sourceId, eventType)`, deliver without validation, set `validated: false`, `schemaVersion: null`, and log warn. | Reject with 400 or drop event | Unconfigured schemas should not drop valid webhook deliveries in gateway mode. | Allows graceful fallback. |
+| **[Phase 2] D6 Ajv Draft-07 Wrapper** | Ajv draft-07 with `allErrors: true` and `strict: false`, cached by schema `_id + version`. Convert to `[{path, keyword}]` only. | Re-compile per event or leak error params | Fast cached validation while strictly avoiding payload values in errors. | Value-free validation errors capped at 20 items. |
+| **[Phase 2] D7 Value-Free Structural Diff** | Recursive comparison of schema.properties and payload for objects (depth <= 5). `added`, `removed`, `typeChanged`. Number accepts integer. | Value-based diff or JSON patch | Eliminates privacy leaks when submitting proposals to AI or logs. | Implemented in `diff.js`. |
+| **[Phase 2] D8 Drift Fingerprint** | `sha256` of `${sourceId}:${eventType}:${baseSchemaVersion}:${canonicalJson}` where arrays and object keys are normalized. | Random ID or ad-hoc hash | Deterministic grouping of identical drift patterns across events. | Verified stable regardless of key order. |
+| **[Phase 2] D9 Queue Topologies & Job IDs** | BullMQ queues `process-event` and `analyze-drift` with `QUEUE_PREFIX`. Job IDs without colons (`${eventId}_v0`, `drift_${fingerprint}_a0`). | Default queue names with colons | Colons in job IDs can break BullMQ Redis key parsing; prefixes isolate environments. | Backoff and retention per D9. |
+| **[Phase 2] D10 Producer Fail-Fast** | Producer BullMQ queue connection uses `enableOfflineQueue: false` and wraps `enqueue` in 2000ms timeout. Ingest returns 200 if enqueue fails. | Infinite memory buffering in redis client | Prevents API thread starvation when Redis is degraded; reconciliation recovers unpicked events. | Tested with fail-fast options. |
+| **[Phase 2] D11 Processor Decoupling** | Processor implemented as plain `processEvent({ job, db, deps })` decoupled from BullMQ. | Tight coupling to BullMQ Worker | Enables fast unit and integration testing without spinning up Redis or BullMQ workers. | In-memory tests run via fake dependencies. |
+| **[Phase 2] D12 Delivery & At-Least-Once** | Global fetch with `AbortSignal.timeout(10000)`. Headers: `x-hookmend-event-id`, `x-hookmend-event-type`, `x-hookmend-attempt`. Delivery is at-least-once; downstream deduplicates with `x-hookmend-event-id`. | At-most-once delivery | Networks can drop acknowledgments; at-least-once guarantees zero event loss. | Downstream must use `x-hookmend-event-id`. |
+| **[Phase 2] D13 Failure & DLQ Handling** | Retryable failures increment `deliveryAttempts`, set `failed`, and throw for backoff. Exhausted attempts or non-retryable 4xx set `dead` (+expireAt), write audit log, and throw `UnrecoverableError`. Safety net in `worker.on('failed')`. | Infinite retry loops or silent drops | Ensures predictable dead-lettering and audit logging. | Handled in processor and worker failed hook. |
+| **[Phase 2] D14 Quarantine & Stub Worker** | Non-conforming payloads transition to `quarantined`, set `driftFingerprint`, audit log, and enqueue `analyze-drift`. Analyze-drift worker is a STUB in Phase 2. | Drop or re-try invalid events | Segregates schema drift for human/AI remediation in Phase 3. | Analyze-drift worker logs and completes. |
+| **[Phase 2] D15 Append-Only Audit Log** | Collection `audit_log` with `actor`, `action`, `entityType`, `entityId`, `detail`. No payload values. TTL 90 days. | Log only to standard out | Durable compliance audit trail for administrative and system transitions. | Indexes on `{entityType, entityId, timestamp}` and TTL. |
+| **[Phase 2] D16 Idempotent Indexing** | Added compound unique on `schemas` and partial unique on active schemas, plus `audit_log` indexes in `createIndexes`. | Manual index creation | Idempotent startup ensures fresh or existing MongoDB instances have all necessary constraints. | Handled in common db client. |
+| **[Phase 2] D17 Reconciliation Runner** | Single worker instance polls unpicked `received` events (>60s) and `requeue_pending` events on startup and interval. | Complex distributed orchestrator | Simple, reliable self-healing for stalled or unenqueued events. | Exposed as `reconcileOnce` for tests. |
+| **[Phase 2] D17b Single Worker Limitation** | Single worker instance assumed for background reconciliation (no distributed leader election). | Distributed leader election (e.g. Redlock) | Minimizes operational complexity for MVP reference gateway. | Documented as known limitation in §18. |
+| **[Phase 2] D18 Phase 2 Configuration** | Config additions: `REDIS_URL`, `QUEUE_PREFIX`, `WORKER_CONCURRENCY`, retry and backoff thresholds, `ADMIN_API_TOKEN` with production startup guard. | Hardcoded constants | Enables full runtime environment configurability. | Validated in config.js and .env.example. |
+| **[Phase 2] D19 /health Redis Status** | `/health` pings Redis (1500ms timeout) and reports `connected` / `disconnected`; overall `degraded` if either mongo or redis is down. | Static health output | Accurately exposes gateway dependency health to load balancers. | Implemented in health router. |
+| **[Phase 2] D20 Worker Graceful Shutdown** | On SIGTERM/SIGINT: clear reconcile timer, await `worker.close()`, close queues, Redis, and Mongo. | Immediate process.exit(0) | Allows active jobs to finish processing cleanly without data corruption. | Tested in main.js. |
 
 ---
 
@@ -808,45 +829,57 @@ When Gemini returns a candidate schema:
 ```
 hookmend/
 ├── docs/
-│   └── SPEC.md
+│   ├── SPEC.md
+│   └── PROGRESS.md
 ├── packages/
-│   ├── api/
+│   ├── common/                       (@hookmend/common)
 │   │   ├── src/
-│   │   │   ├── adapters/         github.js, generic-hmac.js
-│   │   │   ├── db/               client.js, sources.js, events.js, schemas.js, proposals.js, auditLog.js
-│   │   │   ├── middleware/       rawBody.js, auth.js, requestId.js, rateLimit.js, errorHandler.js
-│   │   │   ├── queue/            client.js, stub.js
-│   │   │   ├── routes/           ingest.js, sources.js, events.js, schemas.js, proposals.js, sse.js, health.js
-│   │   │   ├── config.js
-│   │   │   ├── logger.js
-│   │   │   ├── server.js
-│   │   │   └── main.js           (graceful SIGTERM/SIGINT shutdown)
-│   │   ├── test/
-│   │   │   ├── unit/             adapters.test.js, ...
-│   │   │   └── integration/      ingest.test.js, ...
-│   │   └── package.json
-│   ├── worker/
-│   │   ├── src/
-│   │   │   ├── process-event/    validate.js, deliver.js, index.js
-│   │   │   ├── analyze-drift/    diff.js, fingerprint.js, replay.js, gemini.js, index.js
+│   │   │   ├── constants.js          (Event statuses, queue names, default config/job options)
+│   │   │   ├── logger.js             (Pino factory with redaction)
+│   │   │   ├── audit.js              (Append-only audit log helper)
+│   │   │   ├── diff.js               (Value-free structural diff)
+│   │   │   ├── fingerprint.js        (Canonical drift fingerprint)
+│   │   │   ├── validate.js           (Ajv draft-07 wrapper)
+│   │   │   ├── db/client.js          (MongoClient manager & idempotent indexes)
+│   │   │   ├── queue/index.js        (BullMQ producer factory & fail-fast connection)
 │   │   │   └── index.js
 │   │   └── package.json
-│   ├── simulator/
+│   ├── api/                          (@hookmend/api)
 │   │   ├── src/
-│   │   │   ├── sender.js
+│   │   │   ├── adapters/             (github.js, generic-hmac.js)
+│   │   │   ├── middleware/           (adminAuth.js, errorHandler.js, rawBody.js, requestId.js)
+│   │   │   ├── routes/               (admin.js, health.js, ingest.js)
+│   │   │   ├── config.js
 │   │   │   ├── server.js
-│   │   │   └── schemas/
+│   │   │   └── main.js
+│   │   ├── test/
+│   │   └── package.json
+│   ├── worker/                       (@hookmend/worker)
+│   │   ├── src/
+│   │   │   ├── delivery.js           (Downstream HTTP delivery & exponential backoff)
+│   │   │   ├── processor.js          (Plain function event processor)
+│   │   │   ├── reconcile.js          (Recovery for received and requeue_pending events)
+│   │   │   ├── process-event/index.js (BullMQ worker & failed hook DLQ safety net)
+│   │   │   ├── analyze-drift/index.js (Stub BullMQ worker)
+│   │   │   └── main.js               (Worker process & graceful shutdown)
+│   │   ├── scripts/exit-test-phase2.js
+│   │   ├── test/
+│   │   └── package.json
+│   ├── simulator/                    (@hookmend/simulator)
+│   │   ├── src/
+│   │   │   ├── sign.js               (HMAC signing & synthetic event generator)
+│   │   │   ├── sender.js             (CLI sender with count, duplicates, drift flags)
+│   │   │   └── receiver.js           (Mock downstream receiver with mode & stats)
 │   │   └── package.json
 │   └── dashboard/
 │       ├── src/
 │       └── package.json
 ├── infra/
-│   ├── docker-compose.yml        (Mongo single-node replica set, Redis)
-│   └── seed/seed.js
-├── package.json                  (Root workspaces: "packages/*", type: "module")
+│   ├── docker-compose.yml            (Mongo 7 single-node replica set, Redis 7)
+│   └── seed/seed.js                  (Idempotent sources & schema seeds)
+├── package.json                      (Workspaces: "packages/*")
 ├── .env.example
-├── README.md
-└── LICENSE
+└── README.md
 ```
 
 ---
@@ -930,6 +963,9 @@ hookmend/
 3. **Gemini Free Quotas:** Rate limits (15 RPM, 1,500 RPD). Conservative defaults (10 RPM, 1,000 RPD) with fallback to deterministic diff only when quota is exceeded.
 4. **Single Static Admin Token:** Multi-tenant JWT auth is out of scope for MVP; documented as known limitation.
 5. **No End-to-End Payload Encryption:** Payloads are stored plaintext in MongoDB. Production deployment requires field-level encryption.
+6. **Single-Worker Reconciliation Instance:** Background reconciliation assumes a single worker instance polling MongoDB (no distributed leader election). Production multi-instance deployments require leader election (e.g. Redlock or MongoDB lease locks) to prevent redundant enqueueing.
+7. **At-Least-Once Delivery Contract:** Downstream delivery guarantees at-least-once delivery; downstream webhook receivers must implement deduplication using the provided `x-hookmend-event-id` header.
+
 
 ---
 

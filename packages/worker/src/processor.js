@@ -26,14 +26,20 @@ export async function processEvent({ job, db, deps }) {
     config = {},
   } = deps;
 
-  const eventObjectId = new ObjectId(job.data.eventObjectId);
+  const rawId =
+    job.data.eventObjectId || (ObjectId.isValid(job.data.eventId) ? job.data.eventId : null);
 
   // 1. Fetch event
-  const event = await db.collection('events').findOne({ _id: eventObjectId });
+  const event = rawId
+    ? await db.collection('events').findOne({ _id: new ObjectId(rawId) })
+    : await db.collection('events').findOne({ eventId: job.data.eventId });
+
   if (!event) {
-    logger.warn?.({ eventObjectId }, 'Event not found; skipping');
+    logger.warn?.({ eventObjectId: rawId, eventId: job.data.eventId }, 'Event not found; skipping');
     return;
   }
+
+  const eventObjectId = event._id;
 
   // D4: Skip if already in delivered, dead, or quarantined state
   if (

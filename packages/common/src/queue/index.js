@@ -41,10 +41,19 @@ export function createBullQueue(options = {}) {
 
   async function enqueue(queueName, jobName, data, opts = {}) {
     const queue = getQueue(queueName);
+    const configuredAttempts =
+      options.processEventAttempts ||
+      options.attempts ||
+      (options.config && options.config.PROCESS_EVENT_ATTEMPTS);
+
     const defaultOpts =
       queueName === QUEUE_NAMES.ANALYZE_DRIFT
         ? DEFAULT_JOB_OPTIONS.ANALYZE_DRIFT
-        : DEFAULT_JOB_OPTIONS.PROCESS_EVENT;
+        : {
+            ...DEFAULT_JOB_OPTIONS.PROCESS_EVENT,
+            ...(configuredAttempts ? { attempts: parseInt(configuredAttempts, 10) } : {}),
+            ...(options.defaultJobOptions || {}),
+          };
 
     const enqueuePromise = queue.add(jobName, data, {
       ...defaultOpts,

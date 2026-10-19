@@ -103,3 +103,16 @@
 - Mounted admin router under /api in server.js
 - Test status: 79/79 tests passing (9 test suites)
 - Next: STEP 7 — Phase 2 Exit Test and SPEC updates
+
+## STEP 7 — Phase 2 Exit Test and SPEC Updates [DONE]
+- Implemented packages/worker/scripts/exit-test-phase2.js asserting Scenarios A through G against real docker-compose Mongo and Redis
+- Scenarios verified:
+  - Scenario A: 10 valid events delivered, receiver saw 10, expireAt set [PASS]
+  - Scenario B: 5 drifted events quarantined with same fingerprint, 0 delivered, analyze-drift job created [PASS]
+  - Scenario C: fail503 mode -> dead after 3 attempts, receiver saw 30, 10 event.dead audits [PASS]
+  - Scenario D: fail400 mode -> dead after exactly 1 attempt [PASS]
+  - Scenario E: Concurrent duplicate -> 1 document in DB, 1 delivery, 1 deduplicated response [PASS]
+  - Scenario F: Reconcile unpicked received event (>60s) -> recovered and delivered [PASS]
+  - Scenario G: Admin REST requeue dead event -> requeue_pending -> delivered [PASS]
+- Updated docs/SPEC.md: added decision log entries for D1-D20, updated repository structure, documented at-least-once delivery contract and single-worker reconciliation limitation
+- Phase 2 complete. Next: Phase 3 (Drift Analysis, AI Layer, Proposals, Dashboard, SSE)

@@ -64,3 +64,9 @@
 - Added integration tests for admin REST (auth, pagination, requeue, secrets isolation) in packages/api/test/
 - Test status: 34 Phase 1 tests pass, 12 new Phase 2 tests failing (tests-first)
 - Next: STEP 2 — create packages/common and migrate shared code
+
+## STEP 2 — Common Package Migration [DONE]
+- Created packages/common (@hookmend/common) with constants, logger factory, MongoDB client + idempotent index creation (including schemas and audit_log indexes), and audit-log helper
+- Updated packages/api to depend on @hookmend/common and re-export shared modules
+- Gate verified: 34/34 Phase 1 unit + integration tests pass, npm run exit-test:phase1 PASS
+- Next: STEP 3 — implement drift diff, fingerprint, and Ajv validate in common

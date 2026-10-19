@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@hookmend/common": "*",
     "express": "^5.0.1",
     "express-rate-limit": "^7.4.1",
     "mongodb": "^6.10.0",

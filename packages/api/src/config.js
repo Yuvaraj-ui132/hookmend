@@ -10,9 +10,16 @@ function getConfig() {
     throw new Error('MONGODB_URI environment variable is required');
   }
 
+  const NODE_ENV = process.env.NODE_ENV || 'development';
+  const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || 'change-me';
+
+  if (NODE_ENV === 'production' && (!ADMIN_API_TOKEN || ADMIN_API_TOKEN === 'change-me')) {
+    throw new Error('ADMIN_API_TOKEN must be set to a secure value in production');
+  }
+
   return {
     PORT: parseInt(process.env.PORT || '3000', 10),
-    NODE_ENV: process.env.NODE_ENV || 'development',
+    NODE_ENV,
     MONGODB_URI,
     MAX_BODY_SIZE: parseInt(process.env.MAX_BODY_SIZE || '524288', 10),
     TIMESTAMP_TOLERANCE_SECONDS: parseInt(process.env.TIMESTAMP_TOLERANCE_SECONDS || '300', 10),
@@ -21,6 +28,10 @@ function getConfig() {
     EVENT_TTL_DAYS: parseInt(process.env.EVENT_TTL_DAYS || '14', 10),
     LOG_LEVEL: process.env.LOG_LEVEL || 'info',
     VERSION: '0.2.0',
+    REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
+    QUEUE_PREFIX: process.env.QUEUE_PREFIX || 'hookmend',
+    ADMIN_API_TOKEN,
+    DOWNSTREAM_TIMEOUT_MS: parseInt(process.env.DOWNSTREAM_TIMEOUT_MS || '10000', 10),
   };
 }
 

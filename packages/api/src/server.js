@@ -25,7 +25,7 @@ export function createApp({ db, queue, config }) {
   app.use(requestIdMiddleware);
 
   // Routes
-  app.use(createHealthRouter({ db, config }));
+  app.use(createHealthRouter({ db, queue, config }));
   app.use(createIngestRouter({ db, queue, config }));
 
   // Central error handler (must be last)

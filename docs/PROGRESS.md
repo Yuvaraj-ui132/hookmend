@@ -77,3 +77,11 @@
 - Implemented validatePayload in packages/common/src/validate.js (Ajv draft-07, allErrors:true, strict:false, value-free errors capped at 20)
 - Test status: 18/18 common tests passing
 - Next: STEP 4 — BullMQ producer and API wiring
+
+## STEP 4 — BullMQ Producer and API Wiring [DONE]
+- Implemented createBullQueue in packages/common/src/queue/index.js with fail-fast (enableOfflineQueue: false), 2000ms enqueue timeout, ping, and graceful close
+- Updated .env.example and packages/api/src/config.js with Phase 2 env vars and production admin token guard
+- Updated packages/api/src/routes/health.js to ping Redis via queue.ping() and report connected/disconnected/degraded
+- Wired packages/api/src/main.js to real BullMQ queue factory while keeping stub.js for test injection
+- Test status: 52 tests passing (34 Phase 1 + 18 common); exit-test:phase1 PASS
+- Next: STEP 5 — worker (processor, delivery, reconciliation, analyze-drift stub)

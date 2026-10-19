@@ -8,7 +8,7 @@
 
 import { Router } from 'express';
 
-export function createHealthRouter({ db, config }) {
+export function createHealthRouter({ db, queue, config }) {
   const router = Router();
 
   router.get('/health', async (req, res) => {
@@ -20,13 +20,24 @@ export function createHealthRouter({ db, config }) {
       mongoStatus = 'disconnected';
     }
 
-    const status = mongoStatus === 'connected' ? 'ok' : 'degraded';
+    let redisStatus = 'disconnected';
+    if (queue && typeof queue.ping === 'function') {
+      const ok = await queue.ping(1500);
+      redisStatus = ok ? 'connected' : 'disconnected';
+    } else {
+      redisStatus = 'not_configured';
+    }
+
+    const isOk =
+      mongoStatus === 'connected' &&
+      (redisStatus === 'connected' || redisStatus === 'not_configured');
+    const status = isOk ? 'ok' : 'degraded';
 
     res.json({
       status,
       uptime: Math.floor(process.uptime()),
       mongo: mongoStatus,
-      redis: 'not_configured',
+      redis: redisStatus,
       version: config.VERSION || '0.2.0',
       timestamp: new Date().toISOString(),
     });

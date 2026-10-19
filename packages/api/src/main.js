@@ -4,14 +4,18 @@
 
 import getConfig from './config.js';
 import logger from './logger.js';
-import { connectDb, closeDb } from './db/client.js';
+import { connectDb, closeDb, createBullQueue } from '@hookmend/common';
 import { createApp } from './server.js';
-import { defaultQueue as queue } from './queue/stub.js';
 
 async function main() {
   const config = getConfig();
   const mongoClient = await connectDb(config.MONGODB_URI);
   const db = mongoClient.db();
+
+  const queue = createBullQueue({
+    redisUrl: config.REDIS_URL,
+    prefix: config.QUEUE_PREFIX,
+  });
 
   const app = createApp({ db, queue, config });
 
@@ -22,6 +26,7 @@ async function main() {
   async function shutdown(signal) {
     logger.info({ signal }, 'Graceful shutdown initiated');
     server.close(async () => {
+      await queue.close();
       await closeDb();
       logger.info('Shutdown complete');
       process.exit(0);

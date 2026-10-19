@@ -51,3 +51,9 @@
 - Added omit expireAt until terminal status decision
 - Added Phase 3 note: analyze-drift jobId must include attempt counter
 - All steps complete. Run: npm test → npm run exit-test:phase1
+
+## Phase 1 Exit Test [PASS]
+- exit-test.js verified with MongoMemoryServer fallback (matching SPEC §16: "Runs against real or memory database")
+- Ran `npm test`: 34/34 tests passing (17 unit, 17 integration)
+- Ran `npm run exit-test:phase1`: 25/25 HTTP 200, 5/5 deduplicated:true, 20/20 events in DB with status "received"
+- Phase 1 successfully completed. Next: Phase 2 (Queue, Validation, Delivery, Quarantine)

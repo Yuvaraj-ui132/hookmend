@@ -19,27 +19,47 @@ import { createServer } from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { createApp } from '../src/server.js';
 import { createQueue } from '../src/queue/stub.js';
-import { connectDb } from '../src/db/client.js';
+import { connectDb, closeDb } from '../src/db/client.js';
 import { signGenericHmac, buildPaymentEvent } from '../../simulator/src/sign.js';
-
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  'mongodb://localhost:27017/hookmend?directConnection=true';
 
 const DB_NAME = 'hookmend_exit_test';
 const SLUG = 'sim-payments';
 
+async function getMongoUri() {
+  if (process.env.MONGODB_URI) {
+    return { uri: process.env.MONGODB_URI, mongod: null };
+  }
+
+  // Try connecting to local Docker MongoDB first
+  const defaultLocalUri = 'mongodb://localhost:27017/hookmend?directConnection=true';
+  try {
+    const probe = new MongoClient(defaultLocalUri, { serverSelectionTimeoutMS: 1500 });
+    await probe.connect();
+    await probe.close();
+    console.log('[exit-test] Using local MongoDB at localhost:27017');
+    return { uri: defaultLocalUri, mongod: null };
+  } catch {
+    console.log('[exit-test] Local MongoDB unreachable; spinning up MongoMemoryServer...');
+    const { MongoMemoryServer } = await import('mongodb-memory-server');
+    const mongod = await MongoMemoryServer.create();
+    const uri = mongod.getUri() + 'hookmend';
+    return { uri, mongod };
+  }
+}
+
 async function main() {
   console.log('[exit-test] Starting Phase 1 exit test...');
 
+  const { uri: baseMongoUri, mongod } = await getMongoUri();
+
   // ── 1. Drop + recreate db ────────────────────────────────────────────────
-  const adminClient = new MongoClient(MONGODB_URI);
+  const adminClient = new MongoClient(baseMongoUri);
   await adminClient.connect();
   await adminClient.db(DB_NAME).dropDatabase();
   await adminClient.close();
 
   // ── 2. Connect with indexes ──────────────────────────────────────────────
-  const uri = MONGODB_URI.replace(/\/[^/?]*(\?|$)/, `/${DB_NAME}$1`);
+  const uri = baseMongoUri.replace(/\/[^/?]*(\?|$)/, `/${DB_NAME}$1`);
   const mongoClient = await connectDb(uri);
   const db = mongoClient.db();
 
@@ -157,7 +177,10 @@ async function main() {
 
   // Cleanup
   server.close();
-  await mongoClient.close();
+  await closeDb();
+  if (mongod) {
+    await mongod.stop();
+  }
 
   if (allPass) {
     console.log('\n[exit-test] PASS');

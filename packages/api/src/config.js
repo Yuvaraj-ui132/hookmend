@@ -1,0 +1,30 @@
+/**
+ * config.js — single source of truth for all environment variables.
+ * MONGODB_URI is required at runtime (not at import time, to allow test setup).
+ * Per-source secrets are read at request time from process.env[source.secretEnvVar].
+ */
+
+function getConfig() {
+  const MONGODB_URI = process.env.MONGODB_URI;
+  if (!MONGODB_URI) {
+    throw new Error('MONGODB_URI environment variable is required');
+  }
+
+  return {
+    PORT: parseInt(process.env.PORT || '3000', 10),
+    NODE_ENV: process.env.NODE_ENV || 'development',
+    MONGODB_URI,
+    MAX_BODY_SIZE: parseInt(process.env.MAX_BODY_SIZE || '524288', 10),
+    TIMESTAMP_TOLERANCE_SECONDS: parseInt(process.env.TIMESTAMP_TOLERANCE_SECONDS || '300', 10),
+    INGEST_RATE_LIMIT_MAX: parseInt(process.env.INGEST_RATE_LIMIT_MAX || '100', 10),
+    INGEST_RATE_LIMIT_WINDOW_MS: parseInt(process.env.INGEST_RATE_LIMIT_WINDOW_MS || '60000', 10),
+    EVENT_TTL_DAYS: parseInt(process.env.EVENT_TTL_DAYS || '14', 10),
+    LOG_LEVEL: process.env.LOG_LEVEL || 'info',
+    VERSION: '0.2.0',
+  };
+}
+
+// Export a live config object that reads from process.env at call time.
+// Tests can set MONGODB_URI before calling connectDb / createApp.
+export { getConfig };
+export default getConfig;

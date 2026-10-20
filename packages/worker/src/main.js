@@ -15,6 +15,7 @@ import {
 import { createProcessEventWorker } from './process-event/index.js';
 import { createAnalyzeDriftWorker } from './analyze-drift/index.js';
 import { reconcileOnce } from './reconcile.js';
+import { createGeminiClient } from './ai/gemini.js';
 
 /**
  * Starts worker process and background reconciliation.
@@ -26,6 +27,9 @@ export async function startWorkerApp(overrides = {}) {
     REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
     QUEUE_PREFIX: process.env.QUEUE_PREFIX || DEFAULT_CONFIG.QUEUE_PREFIX,
     WORKER_CONCURRENCY: process.env.WORKER_CONCURRENCY || '5',
+    ENABLE_AI: process.env.ENABLE_AI === 'true',
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_MODEL: process.env.GEMINI_MODEL,
     ...overrides.config,
   };
 
@@ -41,8 +45,10 @@ export async function startWorkerApp(overrides = {}) {
     prefix: config.QUEUE_PREFIX,
   });
 
+  const aiClient = overrides.aiClient || (config.ENABLE_AI ? createGeminiClient({ config, logger }) : null);
+
   const processEventWorker = createProcessEventWorker({ db, queue, config, logger });
-  const analyzeDriftWorker = createAnalyzeDriftWorker({ db, queue, aiClient: overrides.aiClient, config, logger });
+  const analyzeDriftWorker = createAnalyzeDriftWorker({ db, queue, aiClient, config, logger });
 
   logger.info({ prefix: config.QUEUE_PREFIX }, 'Hookmend workers started');
 

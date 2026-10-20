@@ -157,3 +157,11 @@
 - Test status: 31/31 worker tests passing, 58/58 common tests passing (89 total passing)
 - Resume checkpoint: Ready for STEP 4 (Gemini AI Client D28) and STEP 5 (Admin REST D30-D32)
 
+## Phase 3A — STEP 4 — Gemini Client & Smoke Test [DONE]
+- Installed @google/genai (v2.30.0) in packages/worker
+- Created packages/worker/src/ai/gemini.js: Google Gen AI client with structured JSON output schema and startup validation (D28)
+- Created packages/worker/scripts/smoke-gemini.js: standalone manual smoke test with containment check (D28)
+- Updated packages/worker/src/main.js to initialize Gemini client conditionally when ENABLE_AI is true
+- Test status: smoke-gemini skips gracefully when key absent (exit 0); 31/31 worker tests passing
+- Next: STEP 5 — Admin REST proposals endpoints & transactional approval (D30-D32)
+

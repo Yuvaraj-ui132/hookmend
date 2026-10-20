@@ -9,6 +9,7 @@
     "start": "node src/main.js"
   },
   "dependencies": {
+    "@google/genai": "^2.30.0",
     "@hookmend/common": "*",
     "bullmq": "^6.3.17",
     "ioredis": "^6.0.0",

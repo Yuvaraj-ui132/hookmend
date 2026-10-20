@@ -141,3 +141,14 @@
 - All tests currently failing (source files not yet created) — expected
 - Next: STEP 2 — common baseline, replay, redact, containment, proposals indexes
 
+## Phase 3A — STEP 2 — Common Implementation [DONE]
+- Implemented packages/common/src/baseline.js (D21 buildBaselineSchema, D22 buildBreakingChanges)
+- Implemented packages/common/src/replay.js (D23 replayEvents with batching & max 10 failed IDs)
+- Implemented packages/common/src/redact.js (D28 schema allow-list recursion)
+- Implemented packages/common/src/containment.js (D29 strict containment & payload leak prevention)
+- Added proposals collection indexes (D24) in packages/common/src/db/client.js
+- Added PROPOSAL_STATUS and Phase 3A DEFAULT_CONFIG in packages/common/src/constants.js
+- Re-exported all new functions in packages/common/src/index.js
+- Test status: 58/58 common tests passing (7 test files)
+- Next: STEP 3 — Processor proposal linking (D25) & analyze-drift worker (D26, D27)
+

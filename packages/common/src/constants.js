@@ -12,6 +12,12 @@ export const EVENT_STATUS = {
   REQUEUE_PENDING: 'requeue_pending',
 };
 
+export const PROPOSAL_STATUS = {
+  PENDING_REVIEW: 'pending_review',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+};
+
 export const QUEUE_NAMES = {
   PROCESS_EVENT: 'process-event',
   ANALYZE_DRIFT: 'analyze-drift',
@@ -31,6 +37,11 @@ export const DEFAULT_CONFIG = {
   STALE_JOB_THRESHOLD_MS: 300000,
   EVENT_TTL_DAYS: 14,
   AUDIT_TTL_SECONDS: 7776000, // 90 days
+  ENABLE_AI: false,
+  GEMINI_RPM_LIMIT: 10,
+  GEMINI_RPD_LIMIT: 100,
+  REPLAY_MAX_EVENTS: 1000,
+  MAX_SCHEMA_BYTES: 102400,
 };
 
 export const DEFAULT_JOB_OPTIONS = {

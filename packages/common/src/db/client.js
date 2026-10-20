@@ -72,6 +72,21 @@ export async function createIndexes(db) {
     { timestamp: -1 },
     { expireAfterSeconds: 7776000, background: true } // 90 days TTL
   );
+
+  // ── proposals (D24) ───────────────────────────────────────────────────────
+  const proposals = db.collection('proposals');
+  await proposals.createIndex(
+    { sourceId: 1, eventType: 1, driftFingerprint: 1 },
+    { unique: true, partialFilterExpression: { status: 'pending_review' }, background: true }
+  );
+  await proposals.createIndex(
+    { status: 1, createdAt: -1 },
+    { background: true }
+  );
+  await proposals.createIndex(
+    { sourceId: 1, eventType: 1, status: 1 },
+    { background: true }
+  );
 }
 
 /**

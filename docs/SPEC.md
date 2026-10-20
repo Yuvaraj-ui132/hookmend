@@ -983,6 +983,25 @@ hookmend/
 
 ---
 
+## 20. Phase 3A Decision Log (D21–D32)
+
+| # | Topic | Decision | Resolution Rationale |
+|---|---|---|---|
+| D21 | Baseline Schema Generation | `buildBaselineSchema(baseSchema, diff)` generates an additive, non-breaking schema draft-07. Added fields are added to properties without making them required. Removed fields remain in properties but are removed from required array. Type changes become sorted union arrays. | Guarantees backward compatibility: historical payloads that conformed to base schema continue to validate, while newly observed drifted payloads also validate. |
+| D22 | Breaking Change Detection | `buildBreakingChanges(baseSchema, diff)` identifies required fields removed and type mutations. Added fields and optional fields removed are non-breaking. | Operators immediately see breaking risks before approving or editing candidate schemas. |
+| D23 | Replay Verification | `replayEvents({ db, sourceId, eventType, driftFingerprint, schema, max })` validates quarantined payloads against proposed schema. Batches of 200, caps at `max`, returns total/passed/failed/truncated and max 10 failed IDs. NEVER returns payload values. | Provides objective pass/fail metrics without exposing sensitive webhook data to logs or AI contexts. |
+| D24 | Proposals Schema & Indexes | Created `proposals` collection with compound unique partial index on `{ sourceId: 1, eventType: 1, driftFingerprint: 1 }` with `{ status: 'pending_review' }`, plus `{ status: 1, createdAt: -1 }` and `{ sourceId: 1, eventType: 1, status: 1 }`. | Prevents concurrent duplicate proposals for identical drift while allowing subsequent proposals after rejection. |
+| D25 | Processor Proposal Linking | When an event drifts, processor queries proposals: if a `pending_review` proposal exists, links `event.proposalId = proposal._id` and skips queueing. Otherwise enqueues `analyze-drift` with `jobId: drift_${fingerprint}_a${N}` where N is prior proposal count. | Prevents redundant analysis jobs when an operator is already reviewing a proposal. |
+| D26 | Analyze-Drift Execution Pipeline | `analyzeDrift` executes sequentially: loads quarantined events, checks idempotency, detects stale base schemas (marking events `requeue_pending` if active schema advanced), computes diff and baseline, optionally refines with AI, runs replay, inserts proposal, links events, and writes audit log. | Fully deterministic analysis pipeline with fail-safes for concurrent schema changes. |
+| D27 | Gemini Rate Limiting & Quotas | BullMQ worker configured with `limiter: { max: RPM, duration: 60000 }`. Daily RPD tracked via Redis key `gemini:rpd:YYYY-MM-DD`. If 429 occurs with attempts remaining, job is thrown for BullMQ retry; on last attempt, falls back to baseline with `AI_RATE_LIMITED`. Daily quota overflow falls back immediately with `AI_QUOTA_EXCEEDED_DAILY`. | Respects free tier constraints without blocking schema migration. |
+| D28 | Zero-Payload Redaction Allow-List | `redactSchema` strips all values, examples, defaults, titles, descriptions, and enums. Preserves only structural keys (`type`, `properties`, `required`, `items`, `additionalProperties`, `anyOf`, `oneOf`, `allOf`, `format`). | Absolute privacy guarantee: Gemini never receives customer PII or raw payload values. |
+| D29 | Output Containment Validation | `validateAiOutput` verifies exact top-level keys, max byte size, Ajv compilation, draft-07 compatibility, rejection of HTTP `$ref`, confidence range, rationale length <= 1000, and scans for string leakage (>= 4 chars) from sample payloads. | Hard boundary preventing hallucinated schemas, malicious injection, or data exfiltration. |
+| D30 | Admin REST Management API | Implemented `/api/quarantine` grouping, `/api/proposals` (list, get, patch, approve, reject, reanalyze), and `/api/audit` query endpoints. | Full operator visibility and manual control before any schema activation occurs. |
+| D31 | Phase 3A Configuration Schema | Added `ENABLE_AI`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_RPM_LIMIT`, `GEMINI_RPD_LIMIT`, `MAX_SCHEMA_BYTES`, and `REPLAY_MAX_EVENTS` to `config.js` and `.env.example`. | Clear defaults with environment variable overrides. |
+| D32 | Transactional Approval & Requeue | `POST /api/proposals/:id/approve` executes in a MongoDB transaction: deactivates current schema, inserts new schema version, updates proposal to `approved`, transitions events to `requeue_pending`, writes audit log, and enqueues events to `process-event` queue. | Zero race conditions: prevents split-brain active schemas and guarantees at-least-once event redelivery upon schema activation. |
+
+---
+
 ## Appendix A: Drift Fingerprint Algorithm
 
 The `driftFingerprint` is computed deterministically across the structural differences, scoped by source, event type, and base schema version:

@@ -183,3 +183,8 @@
 - Verified script fails fast with FATAL: MongoDB unreachable when Docker Desktop is offline (preserving contract)
 - Next: STEP 7 — Decision Log & SPEC updates (D21-D32)
 
+## Phase 3A — STEP 7 — Decision Log & SPEC Updates [DONE]
+- Updated docs/SPEC.md: added Section 20 "Phase 3A Decision Log (D21–D32)" documenting baseline schema, breaking changes, replay, proposals collection, processor linking, analyze-drift pipeline, Gemini rate limits, redaction allow-list, containment validation, REST API, configuration, and transactional approval
+- All 160 unit and integration tests passing across all 16 test files (100% pass rate)
+- Phase 3A is fully implemented and verified
+

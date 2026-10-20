@@ -103,19 +103,33 @@ export async function processEvent({ job, db, deps }) {
       });
 
       const quarantinedAt = nowFn();
+
+      // Check if a pending_review proposal exists for this drift (D25)
+      const proposalsColl = db.collection('proposals');
+      const pendingProposal = await proposalsColl.findOne({
+        sourceId: event.sourceId,
+        eventType: event.eventType,
+        driftFingerprint,
+        status: 'pending_review',
+      });
+
+      const quarantineSet = {
+        status: EVENT_STATUS.QUARANTINED,
+        driftFingerprint,
+        quarantinedAt,
+        schemaVersion,
+        validationErrors: validationResult.errors.slice(0, 20),
+        validated: true,
+        updatedAt: quarantinedAt,
+      };
+
+      if (pendingProposal) {
+        quarantineSet.proposalId = pendingProposal._id;
+      }
+
       await db.collection('events').updateOne(
         { _id: eventObjectId, status: EVENT_STATUS.PROCESSING },
-        {
-          $set: {
-            status: EVENT_STATUS.QUARANTINED,
-            driftFingerprint,
-            quarantinedAt,
-            schemaVersion,
-            validationErrors: validationResult.errors.slice(0, 20),
-            validated: true,
-            updatedAt: quarantinedAt,
-          },
-        }
+        { $set: quarantineSet }
       );
 
       await writeAuditLog(db, {
@@ -127,12 +141,25 @@ export async function processEvent({ job, db, deps }) {
           driftFingerprint,
           schemaVersion,
           errorCount: validationResult.errors.length,
+          ...(pendingProposal ? { proposalId: pendingProposal._id } : {}),
         },
         timestamp: quarantinedAt,
       });
 
-      // Enqueue analyze-drift job (D9, D14)
-      if (queue) {
+      // Enqueue analyze-drift job only if no proposal is pending review (D25)
+      if (!pendingProposal && queue) {
+        let proposalCount = 0;
+        try {
+          proposalCount = await proposalsColl.countDocuments({
+            sourceId: event.sourceId,
+            eventType: event.eventType,
+            driftFingerprint,
+          });
+        } catch {
+          proposalCount = 0;
+        }
+
+        const jobId = `drift_${driftFingerprint}_a${proposalCount}`;
         await queue.enqueue(
           QUEUE_NAMES.ANALYZE_DRIFT,
           'analyze-drift',
@@ -141,9 +168,9 @@ export async function processEvent({ job, db, deps }) {
             sourceId: event.sourceId.toString(),
             eventType: event.eventType,
             triggerEventId: event.eventId,
-            requestId: job.data.requestId,
+            requestId: job.data?.requestId,
           },
-          { jobId: `drift_${driftFingerprint}_a0` }
+          { jobId }
         );
       }
 

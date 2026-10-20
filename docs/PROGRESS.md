@@ -149,6 +149,11 @@
 - Added proposals collection indexes (D24) in packages/common/src/db/client.js
 - Added PROPOSAL_STATUS and Phase 3A DEFAULT_CONFIG in packages/common/src/constants.js
 - Re-exported all new functions in packages/common/src/index.js
-- Test status: 58/58 common tests passing (7 test files)
-- Next: STEP 3 — Processor proposal linking (D25) & analyze-drift worker (D26, D27)
+## Phase 3A — STEP 3 — Processor & Analyze Worker [DONE]
+- Updated packages/worker/src/processor.js: queries proposals collection for pending_review proposal, links proposalId to quarantined event, suppresses redundant enqueue, uses dynamic attempt counter suffix _a${N} for jobId (D25)
+- Created packages/worker/src/analyze-drift/worker.js: full analyzeDrift implementation with idempotency, stale base detection & requeue, structural diff calculation, baseline schema building, breaking change detection, replay, daily Redis quota check, AI containment validation, rate limit handling, and proposals/events/audit linking (D26, D27)
+- Updated packages/worker/src/analyze-drift/index.js: configured BullMQ worker with rate limiter ({ max: rpmLimit, duration: 60000 }), connected analyzeDrift processor (D27)
+- Updated packages/worker/src/main.js: passed db, queue, aiClient to createAnalyzeDriftWorker
+- Test status: 31/31 worker tests passing, 58/58 common tests passing (89 total passing)
+- Resume checkpoint: Ready for STEP 4 (Gemini AI Client D28) and STEP 5 (Admin REST D30-D32)
 

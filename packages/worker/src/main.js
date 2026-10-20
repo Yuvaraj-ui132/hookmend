@@ -42,7 +42,7 @@ export async function startWorkerApp(overrides = {}) {
   });
 
   const processEventWorker = createProcessEventWorker({ db, queue, config, logger });
-  const analyzeDriftWorker = createAnalyzeDriftWorker({ config, logger });
+  const analyzeDriftWorker = createAnalyzeDriftWorker({ db, queue, aiClient: overrides.aiClient, config, logger });
 
   logger.info({ prefix: config.QUEUE_PREFIX }, 'Hookmend workers started');
 

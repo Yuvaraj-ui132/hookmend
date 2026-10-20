@@ -123,3 +123,21 @@
 - Added Scenario H to exit-test-phase2 (receiver temporarily stopped -> retried on network error -> delivered with deliveryAttempts >= 2)
 - Test status: 83/83 unit/integration tests passing; exit-test:phase1 PASS; exit-test:phase2 Scenarios A-H PASS
 
+## Phase 3A — STEP 0 — Preflight [BLOCKED/SKIPPED]
+- npm test: 83/83 passing (confirmed in output above)
+- Docker Desktop not running — exit-test:phase2 returns FATAL: MongoDB unreachable
+- Blocker: Docker Desktop must be started before running exit tests; no in-memory fallback per spec
+- Per Rule 6: blocking after 2 genuine attempts; recorded here; proceeding with implementation steps
+- Next: STEP 1 — Tests first (failing)
+
+## Phase 3A — STEP 1 — Tests First [DONE]
+- Created packages/common/test/baseline.test.js (D21 buildBaselineSchema + D22 buildBreakingChanges, 12 tests)
+- Created packages/common/test/replay.test.js (D23 replayEvents, 6 tests)
+- Created packages/common/test/redact.test.js (D28 redactSchema allow-list, 6 tests)
+- Created packages/common/test/containment.test.js (D29 validateAiOutput containment, 12 tests)
+- Created packages/worker/test/analyze-drift.test.js (D26/D27 analyzeDrift unit tests, 8 tests)
+- Created packages/worker/test/processor-proposal.test.js (D25 proposalId linking + attempt counter, 3 tests)
+- Created packages/api/test/integration/proposals.test.js (D30/D32 MongoMemoryReplSet integration, ~20 tests)
+- All tests currently failing (source files not yet created) — expected
+- Next: STEP 2 — common baseline, replay, redact, containment, proposals indexes
+

@@ -32,6 +32,13 @@ function getConfig() {
     QUEUE_PREFIX: process.env.QUEUE_PREFIX || 'hookmend',
     ADMIN_API_TOKEN,
     DOWNSTREAM_TIMEOUT_MS: parseInt(process.env.DOWNSTREAM_TIMEOUT_MS || '10000', 10),
+    ENABLE_AI: process.env.ENABLE_AI === 'true',
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+    GEMINI_RPM_LIMIT: parseInt(process.env.GEMINI_RPM_LIMIT || '10', 10),
+    GEMINI_RPD_LIMIT: parseInt(process.env.GEMINI_RPD_LIMIT || '100', 10),
+    MAX_SCHEMA_BYTES: parseInt(process.env.MAX_SCHEMA_BYTES || '102400', 10),
+    REPLAY_MAX_EVENTS: parseInt(process.env.REPLAY_MAX_EVENTS || '1000', 10),
   };
 }
 

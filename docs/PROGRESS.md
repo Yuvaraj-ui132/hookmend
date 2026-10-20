@@ -165,3 +165,15 @@
 - Test status: smoke-gemini skips gracefully when key absent (exit 0); 31/31 worker tests passing
 - Next: STEP 5 — Admin REST proposals endpoints & transactional approval (D30-D32)
 
+## Phase 3A — STEP 5 — Admin REST & Transactional Approval [DONE]
+- Implemented GET /api/quarantine aggregation endpoint grouped by driftFingerprint (D30)
+- Implemented GET /api/proposals (pagination, status/sourceId/eventType filters) and GET /api/proposals/:id (D30)
+- Implemented PATCH /api/proposals/:id with Ajv validation and replay recomputation (D30)
+- Implemented POST /api/proposals/:id/approve with MongoDB transaction: active schema version bump, status approved, quarantined events to requeue_pending, audit logs, and BullMQ requeue (D30)
+- Implemented POST /api/proposals/:id/reject and POST /api/proposals/reanalyze (D30)
+- Implemented GET /api/audit sorted newest-first (D30)
+- Updated config.js & .env.example with Phase 3A configuration options (D31)
+- Updated audit.js to accept session options for MongoDB transactions
+- Test status: 160/160 tests passing across all 16 test files (unit & integration)
+- Next: STEP 6 — Exit Test Phase 3A script
+

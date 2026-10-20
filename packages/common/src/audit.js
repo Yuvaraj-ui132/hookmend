@@ -22,7 +22,7 @@ export async function writeAuditLog(db, {
   entityId,
   detail = {},
   timestamp = new Date(),
-}) {
+}, options = {}) {
   return db.collection('audit_log').insertOne({
     timestamp,
     actor,
@@ -30,5 +30,5 @@ export async function writeAuditLog(db, {
     entityType,
     entityId,
     detail,
-  });
+  }, options);
 }

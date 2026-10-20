@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { MongoClient, ObjectId } from 'mongodb';
 import request from 'supertest';
-import { createApp } from '../../api/src/server.js';
+import { createApp } from '../../src/server.js';
 import { createIndexes } from '@hookmend/common';
 
 const ADMIN_TOKEN = 'test-admin-token-3a';

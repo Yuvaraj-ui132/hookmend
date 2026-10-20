@@ -13,6 +13,7 @@
     "test": "vitest run",
     "exit-test:phase1": "node packages/api/scripts/exit-test.js",
     "exit-test:phase2": "node packages/worker/scripts/exit-test-phase2.js",
+    "exit-test:phase3a": "node packages/worker/scripts/exit-test-phase3a.js",
     "seed": "node infra/seed/seed.js",
     "dev": "npm run dev --workspace=packages/api"
   },

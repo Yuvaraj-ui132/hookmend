@@ -177,3 +177,9 @@
 - Test status: 160/160 tests passing across all 16 test files (unit & integration)
 - Next: STEP 6 — Exit Test Phase 3A script
 
+## Phase 3A — STEP 6 — Exit Test Phase 3A Script [DONE]
+- Created packages/worker/scripts/exit-test-phase3a.js covering Scenarios A-E (quarantine -> proposal -> inspect -> patch -> transactional approve -> redeliver -> audit)
+- Added exit-test:phase3a script to package.json
+- Verified script fails fast with FATAL: MongoDB unreachable when Docker Desktop is offline (preserving contract)
+- Next: STEP 7 — Decision Log & SPEC updates (D21-D32)
+

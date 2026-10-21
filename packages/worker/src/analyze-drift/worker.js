@@ -2,6 +2,7 @@
  * analyze-drift/worker.js — Plain function drift analyzer (D26, D27).
  */
 
+import { ObjectId } from 'mongodb';
 import {
   writeAuditLog,
   computeStructuralDiff,
@@ -39,7 +40,11 @@ export async function analyzeDrift({ job, db, deps }) {
     config = {},
   } = deps;
 
-  const { driftFingerprint, sourceId, eventType } = job.data;
+  const { driftFingerprint, sourceId: rawSourceId, eventType } = job.data;
+  const sourceId =
+    typeof rawSourceId === 'string' && ObjectId.isValid(rawSourceId)
+      ? new ObjectId(rawSourceId)
+      : rawSourceId;
   const now = nowFn();
 
   // 1. Fetch quarantined events matching this drift fingerprint

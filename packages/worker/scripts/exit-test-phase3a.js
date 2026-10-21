@@ -10,7 +10,7 @@
 import { MongoClient, ObjectId } from 'mongodb';
 import { Redis } from 'ioredis';
 import { createServer } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   connectDb,
   closeDb,
@@ -212,23 +212,27 @@ async function main() {
       { event: 'payment.created', orderId: 'ord_d3', amount: '350.00', currency: 'INR' },
     ];
 
-    for (const payload of driftedEvents) {
+    for (let i = 0; i < driftedEvents.length; i++) {
+      const payload = driftedEvents[i];
       const payloadString = JSON.stringify(payload);
-      const timestamp = Math.floor(Date.now() / 1000);
-      const signature = signGenericHmac({ payload: payloadString, secret, timestamp });
+      const timestamp = String(Date.now());
+      const deliveryId = `deliv_${randomUUID().slice(0, 8)}_${i}`;
+      const signature = signGenericHmac(secret, timestamp, payloadString);
 
       const res = await fetch(`http://127.0.0.1:${apiPort}/ingest/${SLUG}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-gateway-signature': signature,
-          'x-gateway-timestamp': String(timestamp),
+          'x-gateway-timestamp': timestamp,
+          'x-gateway-delivery-id': deliveryId,
         },
         body: payloadString,
       });
 
       if (!res.ok) {
-        throw new Error(`Ingest failed with status ${res.status}`);
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Ingest failed with status ${res.status}: ${errText}`);
       }
     }
 

@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ObjectId } from 'mongodb';
 import { analyzeDrift } from '../src/analyze-drift/worker.js';
 
 const BASE_SCHEMA_DOC = {
@@ -348,5 +349,49 @@ describe('analyzeDrift', () => {
         },
       })
     ).rejects.toThrow();
+  });
+
+  it('converts string sourceId to ObjectId when querying and creating proposal', async () => {
+    const hexId = '507f1f77bcf86cd799439011';
+    let queryFilter = null;
+    const db = makeDb({ events: [makeQuarantinedEvent()] });
+    const originalCollection = db.collection;
+    db.collection = (name) => {
+      const coll = originalCollection(name);
+      if (name === 'events') {
+        const origFind = coll.find;
+        coll.find = (filter) => {
+          queryFilter = filter;
+          return origFind(filter);
+        };
+      }
+      return coll;
+    };
+    const queue = makeQueue();
+    const job = makeJob({
+      data: {
+        driftFingerprint: 'fp_test_123',
+        sourceId: hexId,
+        eventType: 'payment.created',
+        triggerEventId: 'evt_001',
+      },
+    });
+
+    await analyzeDrift({
+      job,
+      db,
+      deps: {
+        queue,
+        aiClient: null,
+        now: () => new Date(),
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        config: { ENABLE_AI: false },
+      },
+    });
+
+    expect(queryFilter.sourceId).toBeInstanceOf(ObjectId);
+    expect(queryFilter.sourceId.toString()).toBe(hexId);
+    expect(db._proposals[0].sourceId).toBeInstanceOf(ObjectId);
+    expect(db._proposals[0].sourceId.toString()).toBe(hexId);
   });
 });

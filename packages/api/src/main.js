@@ -1,10 +1,11 @@
 /**
  * main.js — Entry point. Connects DB, starts server, handles graceful shutdown.
+ * Phase 3B: starts SSE change stream watcher (D36).
  */
 
 import getConfig from './config.js';
 import logger from './logger.js';
-import { connectDb, closeDb, createBullQueue } from '@hookmend/common';
+import { connectDb, closeDb, createBullQueue, createSseWatcher } from '@hookmend/common';
 import { createApp } from './server.js';
 
 async function main() {
@@ -17,7 +18,11 @@ async function main() {
     prefix: config.QUEUE_PREFIX,
   });
 
-  const app = createApp({ db, queue, config });
+  // Start SSE change stream watcher (D36)
+  const watcher = createSseWatcher({ db, config });
+  await watcher.start();
+
+  const app = createApp({ db, queue, config, watcher });
 
   const server = app.listen(config.PORT, () => {
     logger.info({ port: config.PORT, env: config.NODE_ENV }, 'Hookmend API started');
@@ -26,6 +31,7 @@ async function main() {
   async function shutdown(signal) {
     logger.info({ signal }, 'Graceful shutdown initiated');
     server.close(async () => {
+      await watcher.stop();
       await queue.close();
       await closeDb();
       logger.info('Shutdown complete');

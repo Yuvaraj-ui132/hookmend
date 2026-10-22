@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "send": "node src/sender.js"
+  },
+  "dependencies": {
+    "@hookmend/common": "*"
   }
 }

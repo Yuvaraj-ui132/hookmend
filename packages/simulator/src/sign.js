@@ -1,55 +1,20 @@
 /**
  * simulator/src/sign.js
- *
- * Signing helpers and synthetic event generator for the Webhook Simulator.
- * SYNTHETIC data only — no real payment values.
+ * D41: Re-exports from @hookmend/common so existing imports continue to work.
  */
 
-import { createHmac, randomUUID } from 'node:crypto';
+// Re-export from common — both the legacy boolean-drift form and the new preset form
+export { signGenericHmac } from '@hookmend/common';
+
+import { buildPaymentEvent as _buildPaymentEvent } from '@hookmend/common';
 
 /**
- * Signs `${timestamp}.${rawBodyString}` using HMAC-SHA256.
- * @param {string} secret
- * @param {string|number} timestamp - ms epoch
- * @param {string} rawBodyString - JSON string of the body
- * @returns {string} "sha256=<hex>"
- */
-export function signGenericHmac(secret, timestamp, rawBodyString) {
-  const signingInput = `${timestamp}.${rawBodyString}`;
-  const hex = createHmac('sha256', secret).update(signingInput).digest('hex');
-  return `sha256=${hex}`;
-}
-
-/**
- * Builds a synthetic payment.created event.
- * With drift=true: amount becomes a string, utr removed, currency added.
- * @param {{ drift?: boolean }} options
- * @returns {object}
+ * Legacy wrapper: accepts { drift: boolean } for backward compat with existing tests.
+ * Maps boolean drift → 'all' preset or 'none'.
  */
 export function buildPaymentEvent({ drift = false } = {}) {
-  const orderId = `ord-${randomUUID().slice(0, 8)}`;
-  const utr = `UTR${Math.floor(Math.random() * 1e12).toString().padStart(12, '0')}`;
-  const paymentId = `pay_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
-
-  if (drift) {
-    // Drifted: amount is string, utr removed, currency added
-    return {
-      event: 'payment.created',
-      orderId,
-      amount: '1000', // type changed: number → string
-      amountPaise: 100000,
-      currency: 'INR', // added field
-      paymentId,
-      // utr: removed
-    };
+  if (typeof drift === 'boolean') {
+    return _buildPaymentEvent({ drift: drift ? 'all' : 'none' });
   }
-
-  return {
-    event: 'payment.created',
-    orderId,
-    amount: 1000,
-    amountPaise: 100000,
-    utr,
-    paymentId,
-  };
+  return _buildPaymentEvent({ drift });
 }

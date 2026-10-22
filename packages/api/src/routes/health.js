@@ -1,14 +1,13 @@
 /**
  * routes/health.js — GET /health
  *
- * Returns: { status, uptime, mongo, redis, version, timestamp }
- * Mongo check: db.command({ ping: 1 })
- * Redis: "not_configured" in Phase 1
+ * Returns: { status, uptime, mongo, redis, version, timestamp, sse, sseClients }
+ * D37: adds sse status from watcher.
  */
 
 import { Router } from 'express';
 
-export function createHealthRouter({ db, queue, config }) {
+export function createHealthRouter({ db, queue, config, watcher = null }) {
   const router = Router();
 
   router.get('/health', async (req, res) => {
@@ -28,6 +27,12 @@ export function createHealthRouter({ db, queue, config }) {
       redisStatus = 'not_configured';
     }
 
+    // SSE watcher status (D37)
+    let sseStatus = 'unavailable';
+    if (watcher) {
+      sseStatus = watcher.getStatus ? watcher.getStatus() : watcher.status || 'unavailable';
+    }
+
     const isOk =
       mongoStatus === 'connected' &&
       (redisStatus === 'connected' || redisStatus === 'not_configured');
@@ -38,6 +43,7 @@ export function createHealthRouter({ db, queue, config }) {
       uptime: Math.floor(process.uptime()),
       mongo: mongoStatus,
       redis: redisStatus,
+      sse: sseStatus,
       version: config.VERSION || '0.2.0',
       timestamp: new Date().toISOString(),
     });

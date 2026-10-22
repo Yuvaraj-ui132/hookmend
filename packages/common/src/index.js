@@ -10,6 +10,10 @@ export { buildBaselineSchema, buildBreakingChanges } from './baseline.js';
 export { replayEvents } from './replay.js';
 export { redactSchema } from './redact.js';
 export { validateAiOutput } from './containment.js';
+export { changeToSseEvent } from './sse.js';
+export { validateDownstreamUrl } from './downstreamUrl.js';
+export { buildPaymentEvent, signGenericHmac } from './simulator.js';
+export { createSseWatcher } from './sseWatcher.js';
 
 import logger from './logger.js';
 export default logger;

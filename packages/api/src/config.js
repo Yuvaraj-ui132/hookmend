@@ -27,7 +27,7 @@ function getConfig() {
     INGEST_RATE_LIMIT_WINDOW_MS: parseInt(process.env.INGEST_RATE_LIMIT_WINDOW_MS || '60000', 10),
     EVENT_TTL_DAYS: parseInt(process.env.EVENT_TTL_DAYS || '14', 10),
     LOG_LEVEL: process.env.LOG_LEVEL || 'info',
-    VERSION: '0.2.0',
+    VERSION: '0.3.0',
     REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
     QUEUE_PREFIX: process.env.QUEUE_PREFIX || 'hookmend',
     ADMIN_API_TOKEN,
@@ -39,6 +39,13 @@ function getConfig() {
     GEMINI_RPD_LIMIT: parseInt(process.env.GEMINI_RPD_LIMIT || '100', 10),
     MAX_SCHEMA_BYTES: parseInt(process.env.MAX_SCHEMA_BYTES || '102400', 10),
     REPLAY_MAX_EVENTS: parseInt(process.env.REPLAY_MAX_EVENTS || '1000', 10),
+    // Phase 3B (D42)
+    SSE_HEARTBEAT_MS: parseInt(process.env.SSE_HEARTBEAT_MS || '25000', 10),
+    MAX_SSE_CLIENTS: parseInt(process.env.MAX_SSE_CLIENTS || '20', 10),
+    DASHBOARD_ORIGINS: process.env.DASHBOARD_ORIGINS || 'http://localhost:5173',
+    ENABLE_SIMULATOR_API: process.env.ENABLE_SIMULATOR_API === 'true',
+    SIMULATOR_SOURCES: process.env.SIMULATOR_SOURCES || 'sim-payments',
+    ALLOW_PRIVATE_DOWNSTREAM: process.env.ALLOW_PRIVATE_DOWNSTREAM === 'true',
   };
 }
 

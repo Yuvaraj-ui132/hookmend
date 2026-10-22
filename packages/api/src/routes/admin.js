@@ -10,8 +10,18 @@ import { ObjectId } from 'mongodb';
 import Ajv from 'ajv';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAdminAuthMiddleware } from '../middleware/adminAuth.js';
-import { writeAuditLog, replayEvents, QUEUE_NAMES } from '@hookmend/common';
+import {
+  writeAuditLog, replayEvents, QUEUE_NAMES,
+  validateDownstreamUrl, buildPaymentEvent, signGenericHmac,
+} from '@hookmend/common';
 import logger from '../logger.js';
+import { randomUUID } from 'node:crypto';
+
+// Slug validation: /^[a-z0-9][a-z0-9-]{1,40}$/
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+// SecretEnvVar: /^[A-Z][A-Z0-9_]{2,63}$/
+const SECRET_ENV_RE = /^[A-Z][A-Z0-9_]{2,63}$/;
+const VALID_ADAPTERS = new Set(['github', 'generic-hmac']);
 
 function parseObjectId(id) {
   if (!id || !ObjectId.isValid(id)) {
@@ -20,7 +30,7 @@ function parseObjectId(id) {
   return new ObjectId(id);
 }
 
-export function createAdminRouter({ db, queue, config = {} }) {
+export function createAdminRouter({ db, queue, config = {}, sseClientCount = () => 0, watcher = null }) {
   const router = Router();
   const auth = createAdminAuthMiddleware(config);
 
@@ -704,6 +714,440 @@ export function createAdminRouter({ db, queue, config = {} }) {
         .toArray();
 
       res.json(items);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── Stats (D38) ────────────────────────────────────────────────────────────
+  // Simple in-memory 5-second cache
+  let statsCache = null;
+  let statsCacheAt = 0;
+  const STATS_TTL_MS = 5000;
+
+  router.get('/stats', async (req, res, next) => {
+    try {
+      const now = Date.now();
+      if (statsCache && now - statsCacheAt < STATS_TTL_MS) {
+        return res.json(statsCache);
+      }
+
+      // byStatus counts
+      const statusCounts = await db.collection('events').aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]).toArray();
+
+      const byStatus = {
+        received: 0,
+        processing: 0,
+        delivered: 0,
+        quarantined: 0,
+        failed: 0,
+        dead: 0,
+        requeue_pending: 0,
+      };
+      for (const { _id, count } of statusCounts) {
+        if (_id in byStatus) byStatus[_id] = count;
+      }
+
+      // last24h: 24 hourly buckets
+      const since = new Date(now - 24 * 60 * 60 * 1000);
+      const hourlyRaw = await db.collection('events').aggregate([
+        { $match: { receivedAt: { $gte: since } } },
+        {
+          $group: {
+            _id: {
+              $dateToString: { format: '%Y-%m-%dT%H:00:00.000Z', date: '$receivedAt' },
+            },
+            received: { $sum: 1 },
+          },
+        },
+      ]).toArray();
+
+      const hourlyMap = new Map(hourlyRaw.map((e) => [e._id, e.received]));
+      const last24h = [];
+      for (let h = 23; h >= 0; h--) {
+        const d = new Date(now - h * 60 * 60 * 1000);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}T${String(d.getUTCHours()).padStart(2, '0')}:00:00.000Z`;
+        last24h.push({ hour: key, received: hourlyMap.get(key) || 0 });
+      }
+
+      // Queue job counts
+      async function getQueueCounts(queueName) {
+        try {
+          const q = queue && typeof queue.getQueue === 'function' ? queue.getQueue(queueName) : null;
+          if (!q) return { waiting: 0, active: 0, delayed: 0, failed: 0 };
+          const counts = await q.getJobCounts('waiting', 'active', 'delayed', 'failed');
+          return {
+            waiting: counts.waiting || 0,
+            active: counts.active || 0,
+            delayed: counts.delayed || 0,
+            failed: counts.failed || 0,
+          };
+        } catch {
+          return { waiting: 0, active: 0, delayed: 0, failed: 0 };
+        }
+      }
+
+      const [processEventCounts, analyzeDriftCounts] = await Promise.all([
+        getQueueCounts(QUEUE_NAMES.PROCESS_EVENT),
+        getQueueCounts(QUEUE_NAMES.ANALYZE_DRIFT),
+      ]);
+
+      const pendingProposals = await db.collection('proposals').countDocuments({ status: 'pending_review' });
+
+      statsCache = {
+        byStatus,
+        last24h,
+        queues: {
+          processEvent: processEventCounts,
+          analyzeDrift: analyzeDriftCounts,
+        },
+        pendingProposals,
+        sseClients: sseClientCount(),
+      };
+      statsCacheAt = now;
+
+      res.json(statsCache);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── POST /api/sources (D39) ────────────────────────────────────────────────
+  router.post('/sources', async (req, res, next) => {
+    try {
+      const { slug, name, adapter, secretEnvVar, downstreamUrl } = req.body || {};
+
+      // Validate slug
+      if (!slug || !SLUG_RE.test(slug)) {
+        throw new AppError('INVALID_PAYLOAD',
+          'slug must match /^[a-z0-9][a-z0-9-]{1,40}$/', 400);
+      }
+      // Validate adapter
+      if (!adapter || !VALID_ADAPTERS.has(adapter)) {
+        throw new AppError('INVALID_PAYLOAD',
+          `adapter must be one of: ${[...VALID_ADAPTERS].join(', ')}`, 400);
+      }
+      // Validate secretEnvVar
+      if (!secretEnvVar || !SECRET_ENV_RE.test(secretEnvVar)) {
+        throw new AppError('INVALID_PAYLOAD',
+          'secretEnvVar must match /^[A-Z][A-Z0-9_]{2,63}$/', 400);
+      }
+      // Validate name
+      if (!name || typeof name !== 'string' || name.length > 100) {
+        throw new AppError('INVALID_PAYLOAD', 'name is required and must be <= 100 chars', 400);
+      }
+      // Validate downstreamUrl
+      const urlErr = validateDownstreamUrl(downstreamUrl, config);
+      if (urlErr) {
+        throw new AppError('INVALID_URL', urlErr, 400);
+      }
+
+      // Check duplicate slug
+      const existing = await db.collection('sources').findOne({ slug });
+      if (existing) {
+        throw new AppError('SLUG_EXISTS', `A source with slug "${slug}" already exists`, 409);
+      }
+
+      const now = new Date();
+      const result = await db.collection('sources').insertOne({
+        slug,
+        name,
+        adapter,
+        secretEnvVar,
+        downstreamUrl,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await writeAuditLog(db, {
+        actor: 'human:admin',
+        action: 'source.created',
+        entityType: 'source',
+        entityId: result.insertedId,
+        detail: { slug, name, adapter },
+        timestamp: now,
+      });
+
+      const created = await db.collection('sources').findOne(
+        { _id: result.insertedId },
+        { projection: { secretEnvVar: 0 } }
+      );
+
+      res.status(201).json(created);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── PATCH /api/sources/:id (D39) ──────────────────────────────────────────
+  router.patch('/sources/:id', async (req, res, next) => {
+    try {
+      const _id = parseObjectId(req.params.id);
+      const source = await db.collection('sources').findOne({ _id });
+      if (!source) {
+        throw new AppError('NOT_FOUND', 'Source not found', 404);
+      }
+
+      const { name, downstreamUrl, active } = req.body || {};
+      const $set = { updatedAt: new Date() };
+
+      if (name !== undefined) {
+        if (typeof name !== 'string' || name.length > 100) {
+          throw new AppError('INVALID_PAYLOAD', 'name must be a string <= 100 chars', 400);
+        }
+        $set.name = name;
+      }
+
+      if (downstreamUrl !== undefined) {
+        const urlErr = validateDownstreamUrl(downstreamUrl, config);
+        if (urlErr) {
+          throw new AppError('INVALID_URL', urlErr, 400);
+        }
+        $set.downstreamUrl = downstreamUrl;
+      }
+
+      if (active !== undefined) {
+        $set.active = Boolean(active);
+      }
+
+      await db.collection('sources').updateOne({ _id }, { $set });
+
+      await writeAuditLog(db, {
+        actor: 'human:admin',
+        action: active === false ? 'source.deactivated' : 'source.updated',
+        entityType: 'source',
+        entityId: _id,
+        detail: $set,
+        timestamp: $set.updatedAt,
+      });
+
+      const updated = await db.collection('sources').findOne(
+        { _id },
+        { projection: { secretEnvVar: 0 } }
+      );
+      res.json(updated);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── DELETE /api/sources/:id (D39) — soft delete ───────────────────────────
+  router.delete('/sources/:id', async (req, res, next) => {
+    try {
+      const _id = parseObjectId(req.params.id);
+      const source = await db.collection('sources').findOne({ _id });
+      if (!source) {
+        throw new AppError('NOT_FOUND', 'Source not found', 404);
+      }
+
+      const now = new Date();
+      await db.collection('sources').updateOne({ _id }, { $set: { active: false, updatedAt: now } });
+
+      await writeAuditLog(db, {
+        actor: 'human:admin',
+        action: 'source.deactivated',
+        entityType: 'source',
+        entityId: _id,
+        detail: { slug: source.slug },
+        timestamp: now,
+      });
+
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── POST /api/schemas (D39) ───────────────────────────────────────────────
+  router.post('/schemas', async (req, res, next) => {
+    try {
+      const { sourceId, eventType, schema } = req.body || {};
+
+      if (!sourceId || !eventType) {
+        throw new AppError('INVALID_PAYLOAD', 'sourceId and eventType are required', 400);
+      }
+
+      if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+        throw new AppError('INVALID_SCHEMA', 'schema must be a JSON object', 400);
+      }
+
+      // Check schema byte size
+      const schemaBytes = Buffer.byteLength(JSON.stringify(schema), 'utf8');
+      if (schemaBytes > (config.MAX_SCHEMA_BYTES || 102400)) {
+        throw new AppError('INVALID_SCHEMA', 'schema exceeds MAX_SCHEMA_BYTES', 400);
+      }
+
+      // Compile with Ajv
+      const ajv = new Ajv({ allErrors: true, strict: false });
+      try {
+        ajv.compile(schema);
+      } catch (compileErr) {
+        throw new AppError('INVALID_SCHEMA', `Invalid schema: ${compileErr.message}`, 400);
+      }
+
+      const sId = ObjectId.isValid(sourceId) ? new ObjectId(sourceId) : sourceId;
+
+      // Only create when no schema exists for this pair
+      const existingSchema = await db.collection('schemas').findOne({
+        sourceId: { $in: [sId, sourceId] },
+        eventType,
+      });
+      if (existingSchema) {
+        throw new AppError('SCHEMA_EXISTS',
+          'A schema already exists for this source+eventType pair; use proposals to change it', 409);
+      }
+
+      const now = new Date();
+      const result = await db.collection('schemas').insertOne({
+        sourceId: sId,
+        eventType,
+        version: 1,
+        active: true,
+        activatedBy: 'human:admin',
+        activatedAt: now,
+        schema,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await writeAuditLog(db, {
+        actor: 'human:admin',
+        action: 'schema.created',
+        entityType: 'schema',
+        entityId: result.insertedId,
+        detail: { sourceId: sId.toString(), eventType, version: 1 },
+        timestamp: now,
+      });
+
+      const created = await db.collection('schemas').findOne({ _id: result.insertedId });
+      res.status(201).json(created);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── GET /api/events/:id/raw-hash (D39) ───────────────────────────────────
+  router.get('/events/:id/raw-hash', async (req, res, next) => {
+    try {
+      const _id = parseObjectId(req.params.id);
+      const event = await db.collection('events').findOne({ _id }, { projection: { rawBodyHash: 1 } });
+      if (!event) {
+        throw new AppError('NOT_FOUND', 'Event not found', 404);
+      }
+      res.json({ rawBodyHash: event.rawBodyHash || null });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── POST /api/simulate (D41) ──────────────────────────────────────────────
+  router.post('/simulate', async (req, res, next) => {
+    try {
+      if (!config.ENABLE_SIMULATOR_API) {
+        throw new AppError('NOT_FOUND', 'Simulator API is not enabled', 404);
+      }
+
+      const allowedSlugs = new Set(
+        (config.SIMULATOR_SOURCES || 'sim-payments')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      );
+
+      const {
+        sourceSlug = 'sim-payments',
+        count = 1,
+        duplicates = 0,
+        drift = 'none',
+      } = req.body || {};
+
+      // Validate slug against allow-list
+      if (!allowedSlugs.has(sourceSlug)) {
+        throw new AppError('FORBIDDEN', `sourceSlug "${sourceSlug}" is not in SIMULATOR_SOURCES allow-list`, 403);
+      }
+
+      // Validate count
+      const numCount = parseInt(count, 10);
+      if (isNaN(numCount) || numCount < 1 || numCount > 50) {
+        throw new AppError('INVALID_PAYLOAD', 'count must be between 1 and 50', 400);
+      }
+
+      const numDuplicates = parseInt(duplicates, 10) || 0;
+      if (numDuplicates < 0 || numDuplicates > numCount) {
+        throw new AppError('INVALID_PAYLOAD', 'duplicates must be between 0 and count', 400);
+      }
+
+      // Look up source
+      const source = await db.collection('sources').findOne({ slug: sourceSlug, active: true });
+      if (!source) {
+        throw new AppError('NOT_FOUND', `Active source "${sourceSlug}" not found`, 404);
+      }
+
+      const secret = process.env[source.secretEnvVar];
+      if (!secret) {
+        throw new AppError('INTERNAL_ERROR',
+          `Secret env var "${source.secretEnvVar}" not configured`, 500);
+      }
+
+      const port = config.PORT || 3000;
+      const ingestUrl = `http://127.0.0.1:${port}/ingest/${sourceSlug}`;
+
+      // Build events
+      const events = Array.from({ length: numCount }, () => ({
+        deliveryId: randomUUID(),
+        body: buildPaymentEvent({ drift }),
+      }));
+
+      const statuses = {};
+      let accepted = 0;
+      let deduplicated = 0;
+
+      async function sendOne(body, deliveryId) {
+        const ts = String(Date.now());
+        const rawBody = JSON.stringify(body);
+        const sig = signGenericHmac(secret, ts, rawBody);
+
+        const r = await fetch(ingestUrl, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-gateway-signature': sig,
+            'x-gateway-timestamp': ts,
+            'x-gateway-delivery-id': deliveryId,
+          },
+          body: rawBody,
+          signal: AbortSignal.timeout(10000),
+        });
+        const status = r.status;
+        statuses[status] = (statuses[status] || 0) + 1;
+        if (status === 200) {
+          accepted++;
+          const json = await r.json().catch(() => ({}));
+          if (json.deduplicated) deduplicated++;
+        } else {
+          await r.body?.cancel?.().catch(() => {});
+        }
+      }
+
+      // Send unique events
+      for (const ev of events) {
+        await sendOne(ev.body, ev.deliveryId);
+      }
+
+      // Send duplicates (reuse same deliveryId)
+      for (let i = 0; i < numDuplicates && i < events.length; i++) {
+        await sendOne(events[i].body, events[i].deliveryId);
+      }
+
+      res.json({
+        sent: numCount + numDuplicates,
+        accepted,
+        deduplicated,
+        statuses,
+      });
     } catch (err) {
       next(err);
     }

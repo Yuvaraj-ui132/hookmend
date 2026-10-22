@@ -188,3 +188,35 @@
 - All 160 unit and integration tests passing across all 16 test files (100% pass rate)
 - Phase 3A is fully implemented and verified
 
+## Phase 3B — STEP 1 & 2 — SSE, Admin Endpoints, CORS & Simulator Common [DONE]
+- Implemented `packages/common/src/sse.js`: SSE message formatter, parser, and allow-listed event filters (D34, D35)
+- Implemented `packages/common/src/sseWatcher.js`: MongoDB Change Stream watcher with resume token persistence and graceful fallback (D36)
+- Implemented `packages/common/src/downstreamUrl.js`: SSRF-safe URL validation (RFC 1918, loopback, link-local, cloud metadata blocks) (D38)
+- Implemented `packages/common/src/simulator.js`: deterministic synthetic webhook generator with drift mutation presets (D41)
+- Implemented `packages/api/src/routes/sse.js`: GET /api/sse with Bearer authentication, connection cap, heartbeat, and slow-consumer drop (D33-D37)
+- Implemented admin sources CRUD (`POST /api/sources`, `PATCH /api/sources/:id`, `DELETE /api/sources/:id`), schemas (`POST /api/schemas`), system stats (`GET /api/stats`), and simulation (`POST /api/simulate`) (D38, D39, D41)
+- Implemented CORS middleware on `/api/*` only, strictly excluding `/ingest/*` (D40)
+- Tests: 243/243 tests passing
+
+## Phase 3B — STEP 5 — React Dashboard Package & Zero-Payload Enforcement [DONE]
+- Scaffolded `@hookmend/dashboard` (Vite 5, React 18, React Router 6, Vitest + jsdom)
+- Implemented design system in `packages/dashboard/src/index.css`: dark/light themes, Inter typography, CSS tokens, glassmorphism, responsive shell
+- Implemented API client (`packages/dashboard/src/api/client.js`) with Bearer token authentication, 401 handling, and mapped error codes (D44)
+- Implemented SSE client (`packages/dashboard/src/api/sse.js`) with ReadableStream chunk boundary parser, exponential backoff, jitter, and automatic resync (D45)
+- Implemented dashboard views (`LiveFeed`, `Quarantine`, `Proposals`, `Schemas`, `Sources`, `Status`, `Simulator`) (D46)
+- Implemented Zero-Payload assertions in `packages/dashboard/test/zeroPayloadRedaction.test.jsx`: DOM scanning verifies payload values, secrets, and rawBodyHash are never rendered (D22, D34, D46)
+- Tested production bundle build with `vite build`
+- Tests: 262/262 tests passing across 28 test files
+
+## Phase 3B — STEP 6 — Exit Test Phase 3B Script [DONE]
+- Created `packages/api/scripts/exit-test-phase3b.js` covering Scenarios A-F:
+  - MongoDB replica set and Redis reachability probe (fails fast with FATAL if unreachable)
+  - CORS header validation on `/api/*` vs `/ingest/*` (D40)
+  - Admin endpoints validation (sources CRUD, stats, schemas)
+  - GET /api/sse authentication, stream headers, and event reception
+  - Webhook simulation with drift presets and zero payload leaks
+  - Dashboard production bundle integrity check
+- Added `"exit-test:phase3b"` script to root `package.json`
+- Tests: 262/262 passing; exit test fails fast with clean FATAL when MongoDB is offline
+
+

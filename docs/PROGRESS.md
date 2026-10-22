@@ -223,5 +223,28 @@
 - Added Decision Log D33-D48, Vite major selection, and SSE architecture to `docs/SPEC.md`
 - Verification: 263/263 unit/integration tests passing; seed and exit-test for phase1, phase2, phase3a, phase3b all PASS.
 
+## Phase 3B Housekeeping — STEP 1 Audit (Real API vs Dashboard Shapes) [DONE]
+Audited every endpoint called by `packages/dashboard` against the real stack (`docker compose` Mongo + Redis and API server) with the admin token. Real top-level shapes (keys and types) compared with dashboard assumptions:
 
-
+| Page | Endpoint | Actual Top-Level Shape | What Page Expected | Mismatch? |
+|---|---|---|---|---|
+| `LoginPage` | `GET /api/stats` | Object `{ byStatus: Object, last24h: Array, queues: Object, pendingProposals: Number, sseClients: Number }` | Checks `res.status === 401` to validate token | No |
+| `LiveFeed` | `GET /api/events?limit=100` | Object `{ items: Array, page: Number, limit: Number, total: Number }` | `(data?.events \|\| data \|\| []).map(...)` (expected array or `{ events: [...] }`; got Object `{ items: [...] }`, threw `TypeError: ((intermediate value) \|\| data \|\| []).map is not a function`) | **Yes** |
+| `Quarantine` | `GET /api/quarantine?limit=100` | Array of objects `[{ driftFingerprint: String, sourceId: ObjectId, eventType: String, count: Number, firstSeen: Date, lastSeen: Date, samplePayload: Object, proposalId: ObjectId }]` | `(data?.events \|\| data \|\| [])` expecting individual event documents with `sourceSlug`, `status`, `receivedAt` | **Yes** |
+| `Quarantine` | `POST /api/events/:id/requeue` | Object `{ ok: Boolean, eventId: String, status: 'requeue_pending', requeueSeq: Number }` | Requeues dead/failed event by `_id`. `Quarantine.jsx` attempted to pass driftFingerprint | **Yes** |
+| `Proposals` | `GET /api/proposals` | Object `{ items: Array, page: Number, limit: Number, total: Number }` | `(data?.proposals \|\| data \|\| []).filter(...)` (expected array or `{ proposals: [...] }`; got Object `{ items: [...] }`, threw `TypeError: proposals.filter is not a function`, crashing React into blank white page) | **Yes** |
+| `Proposals` (detail) | `GET /api/proposals/:id` | Object `{ _id, sourceId, eventType, driftFingerprint, status, baseSchemaVersion, proposedSchema, diff: Array, affectedEventCount, aiUsed, ... }` | Object proposal with fields `_id`, `sourceId`, `eventType`, `driftFingerprint`, `proposedSchema`, `diff`, `status` | No |
+| `Proposals` | `PATCH /api/proposals/:id` | Object updated proposal `{ _id, proposedSchema, ... }` | Sent `{ proposedSchema: Object }` | No |
+| `Proposals` | `POST /api/proposals/:id/approve` | Object `{ ok: Boolean, newSchemaVersion: Number, requeuedEvents: Number }` | Sent `{ currentSchemaVersion, allowPartial }` (reads `baseSchemaVersion` from DB) | No |
+| `Proposals` | `POST /api/proposals/:id/reject` | Object `{ ok: Boolean, proposalId: String, status: 'rejected' }` | Sent `{}` | No |
+| `Schemas` | `GET /api/schemas` | Array of objects `[{ _id, version, eventType, sourceId, active, schema, ... }]` | `schemaData?.schemas \|\| schemaData \|\| []` (ad-hoc fallback expected `{ schemas: [...] }`) | **Yes** |
+| `Schemas` | `GET /api/sources` | Array of objects `[{ _id, slug, name, adapter, active, downstreamUrl, ... }]` | `sourceData?.sources \|\| sourceData \|\| []` (ad-hoc fallback expected `{ sources: [...] }`) | **Yes** |
+| `Schemas` | `POST /api/schemas` | Object `{ ok: Boolean, schemaId: String, version: Number, active: Boolean }` | Sent `{ sourceId, eventType, schema: Object }` | No |
+| `Sources` | `GET /api/sources` | Array of objects `[{ _id, slug, name, adapter, active: Boolean, downstreamUrl, secretEnvVar, ... }]` | `data?.sources \|\| data \|\| []` (ad-hoc fallback) and expected items to have `s.disabled` instead of `s.active` | **Yes** |
+| `Sources` | `POST /api/sources` | Object `{ _id, slug, name, adapter, active: true, downstreamUrl, ... }` | Sent `{ slug, name, adapter, secretEnvVar, downstreamUrl }` | No |
+| `Sources` | `PATCH /api/sources/:id` | Object updated source `{ _id, name, downstreamUrl, active, ... }` | Sent `{ disabled: !s.disabled }` (ignored by API; API expects `{ active: Boolean }`) | **Yes** |
+| `Sources` | `DELETE /api/sources/:id` | Object `{ ok: Boolean, sourceId: String, active: false }` | Calls `apiDel('/api/sources/' + id)` | No |
+| `Status` | `GET /api/stats` | Object `{ byStatus: Object, last24h: Array, queues: Object, pendingProposals: Number, sseClients: Number }` | Expected `stats?.events` (got `byStatus`), `stats?.proposals` (got `pendingProposals` number), `stats?.sourcesCount` (not in endpoint) | **Yes** |
+| `Simulator` | `GET /api/sources` | Array of objects `[{ _id, slug, name, adapter, active, ... }]` | `data?.sources \|\| data \|\| []` | **Yes** |
+| `Simulator` | `POST /api/simulate` | Object `{ sent: Number, accepted: Number, deduplicated: Number, statuses: Object }` | Sent `{ sourceId, eventType, driftPreset }`, expected `{ eventId, sourceSlug, eventType, driftPreset, status }` | **Yes** |
+| `App/SSE` | `GET /api/sse` | Text EventStream `event: ...\ndata: ...\n\n` | `parseSseChunk` parser stream | No |

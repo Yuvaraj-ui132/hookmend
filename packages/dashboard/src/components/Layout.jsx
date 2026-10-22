@@ -3,9 +3,10 @@
  */
 
 import React from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useSse } from '../context/SseContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import ErrorBoundary from './ErrorBoundary.jsx';
 
 const NAV_ITEMS = [
   { to: '/',            label: '⚡ Live Feed' },
@@ -20,6 +21,12 @@ const NAV_ITEMS = [
 export default function Layout() {
   const { sseStatus } = useSse();
   const { logout } = useAuth();
+  const location = useLocation();
+
+  const currentItem = NAV_ITEMS.find((item) =>
+    item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
+  );
+  const pageName = currentItem ? currentItem.label.replace(/^[^\p{L}\p{N}]+/u, '').trim() : 'Page';
 
   const dotClass = `sse-dot ${
     sseStatus === 'live' ? 'live' :
@@ -65,7 +72,9 @@ export default function Layout() {
         </div>
       </nav>
       <main className="main-content" id="main">
-        <Outlet />
+        <ErrorBoundary key={location.pathname} pageName={pageName}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   );

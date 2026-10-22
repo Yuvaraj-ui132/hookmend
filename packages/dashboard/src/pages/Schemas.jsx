@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useSse } from '../context/SseContext.jsx';
-import { apiGet, apiPost } from '../api/client.js';
+import { apiGet, apiPost, asList } from '../api/client.js';
 
 export default function Schemas() {
   const { token } = useAuth();
@@ -36,9 +36,9 @@ export default function Schemas() {
         apiGet('/api/schemas', token),
         apiGet('/api/sources', token).catch(() => ({ sources: [] })),
       ]);
-      const list = schemaData?.schemas || schemaData || [];
+      const list = asList(schemaData, 'schemas', '/api/schemas');
       setSchemas(list);
-      setSources(sourceData?.sources || sourceData || []);
+      setSources(asList(sourceData, 'sources', '/api/sources'));
       if (list.length > 0 && !selectedSchema) {
         setSelectedSchema(list[0]);
       }

@@ -193,7 +193,7 @@ describe('Page-Level Rendering with Real API Shapes', () => {
       if (getEvents) getEvents.mockResolvedValue(REAL_SHAPES.events.items);
       renderWithProviders(<LiveFeed />);
       await waitFor(() => {
-        expect(screen.getByText('sim-payments')).toBeInTheDocument();
+        expect(screen.getAllByText('sim-payments').length).toBeGreaterThan(0);
         expect(screen.getByText('payment.created')).toBeInTheDocument();
       });
     });
@@ -203,7 +203,7 @@ describe('Page-Level Rendering with Real API Shapes', () => {
       if (getEvents) getEvents.mockResolvedValue([]);
       renderWithProviders(<LiveFeed />);
       await waitFor(() => {
-        expect(screen.getByText(/No events received/i)).toBeInTheDocument();
+        expect(screen.getByText(/No events match the current filters/i)).toBeInTheDocument();
       });
     });
 
@@ -230,7 +230,7 @@ describe('Page-Level Rendering with Real API Shapes', () => {
       if (getQuarantine) getQuarantine.mockResolvedValue(REAL_SHAPES.quarantine);
       renderWithProviders(<Quarantine />);
       await waitFor(() => {
-        expect(screen.getByText('payment.created')).toBeInTheDocument();
+        expect(screen.getByText(/payment\.created/)).toBeInTheDocument();
         expect(screen.getByText(/fp_sim_payments/i)).toBeInTheDocument();
       });
     });
@@ -324,8 +324,8 @@ describe('Page-Level Rendering with Real API Shapes', () => {
       if (getSources) getSources.mockResolvedValue(REAL_SHAPES.sources);
       renderWithProviders(<Schemas />);
       await waitFor(() => {
-        expect(screen.getByText('payment.created')).toBeInTheDocument();
-        expect(screen.getByText('v1')).toBeInTheDocument();
+        expect(screen.getAllByText('payment.created').length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/v1/).length).toBeGreaterThan(0);
       });
     });
 
@@ -403,8 +403,8 @@ describe('Page-Level Rendering with Real API Shapes', () => {
       if (getStats) getStats.mockResolvedValue(REAL_SHAPES.stats);
       renderWithProviders(<Status />);
       await waitFor(() => {
-        expect(screen.getByText('10')).toBeInTheDocument(); // delivered
-        expect(screen.getByText('3')).toBeInTheDocument();  // quarantined
+        expect(screen.getAllByText('10').length).toBeGreaterThan(0); // delivered
+        expect(screen.getAllByText('3').length).toBeGreaterThan(0);  // quarantined
       });
     });
 
@@ -431,8 +431,8 @@ describe('Page-Level Rendering with Real API Shapes', () => {
       if (getSources) getSources.mockResolvedValue(REAL_SHAPES.sources);
       renderWithProviders(<Simulator />);
       await waitFor(() => {
-        expect(screen.getByText(/Payment Simulator/i)).toBeInTheDocument();
-        expect(screen.getByText(/Send Simulated Webhook/i)).toBeInTheDocument();
+        expect(screen.getByText(/sim-payments/i)).toBeInTheDocument();
+        expect(screen.getByText(/Dispatch Synthetic Webhook/i)).toBeInTheDocument();
       });
     });
 

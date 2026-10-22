@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useSse } from '../context/SseContext.jsx';
-import { apiGet, apiPost } from '../api/client.js';
+import { apiGet, apiPost, asList } from '../api/client.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 
 export default function Quarantine() {
@@ -23,7 +23,7 @@ export default function Quarantine() {
     setLoading(true); setError('');
     try {
       const data = await apiGet('/api/quarantine?limit=100', token);
-      setEvents(data?.events || data || []);
+      setEvents(asList(data, 'items', '/api/quarantine'));
     } catch (e) {
       setError(e.friendlyMessage || e.message);
     } finally {
@@ -89,13 +89,17 @@ export default function Quarantine() {
               )}
               {events.map((ev, idx) => {
                 const id = ev._id || ev.id || ev.driftFingerprint || idx;
+                const sourceDisplay = ev.sourceSlug || (ev.sourceId ? String(ev.sourceId).slice(-8) : '—');
+                const statusDisplay = ev.status || 'quarantined';
+                const timeDisplay = ev.receivedAt || ev.lastSeen || ev.firstSeen;
+                const countSuffix = ev.count != null && ev.count > 1 ? ` (${ev.count})` : '';
                 return (
                   <tr key={id}>
-                    <td className="text-sm">{ev.sourceSlug}</td>
-                    <td className="text-sm font-mono">{ev.eventType || '—'}</td>
-                    <td><StatusBadge status={ev.status} /></td>
+                    <td className="text-sm">{sourceDisplay}</td>
+                    <td className="text-sm font-mono">{ev.eventType || '—'}{countSuffix}</td>
+                    <td><StatusBadge status={statusDisplay} /></td>
                     <td className="text-xs font-mono text-muted">{(ev.driftFingerprint || '—').slice(0, 16)}</td>
-                    <td className="text-xs text-muted">{new Date(ev.receivedAt).toLocaleString()}</td>
+                    <td className="text-xs text-muted">{timeDisplay ? new Date(timeDisplay).toLocaleString() : '—'}</td>
                     <td>
                       <button
                         id={`requeue-btn-${id}`}

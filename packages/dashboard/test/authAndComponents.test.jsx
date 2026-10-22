@@ -7,17 +7,22 @@ import { MemoryRouter } from 'react-router-dom';
 import LoginPage from '../src/components/LoginPage.jsx';
 import StatusBadge from '../src/components/StatusBadge.jsx';
 import Layout from '../src/components/Layout.jsx';
+import ErrorBoundary from '../src/components/ErrorBoundary.jsx';
 import Sources from '../src/pages/Sources.jsx';
 import Simulator from '../src/pages/Simulator.jsx';
 import { AuthProvider, useAuth } from '../src/context/AuthContext.jsx';
 import { SseProvider } from '../src/context/SseContext.jsx';
 
-vi.mock('../src/api/client.js', () => ({
-  apiGet: vi.fn(),
-  apiPost: vi.fn(),
-  apiPatch: vi.fn(),
-  apiDel: vi.fn(),
-}));
+vi.mock('../src/api/client.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    apiGet: vi.fn(),
+    apiPost: vi.fn(),
+    apiPatch: vi.fn(),
+    apiDel: vi.fn(),
+  };
+});
 
 import { apiGet, apiPost } from '../src/api/client.js';
 
@@ -191,4 +196,25 @@ describe('Dashboard Auth & UI Components (D43, D46)', () => {
       });
     });
   });
+
+  describe('ErrorBoundary component', () => {
+    it('catches render error and displays readable page error message with try again button', () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      function CrashingChild() {
+        throw new Error('Test crash in Proposals page');
+      }
+
+      render(
+        <ErrorBoundary pageName="Proposals">
+          <CrashingChild />
+        </ErrorBoundary>
+      );
+
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      expect(screen.getByText(/Proposals encountered an error/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Try again/i })).toBeInTheDocument();
+      consoleSpy.mockRestore();
+    });
+  });
 });
+

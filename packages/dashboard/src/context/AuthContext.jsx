@@ -30,8 +30,10 @@ export function AuthProvider({ children }) {
     try { sessionStorage.removeItem('hm_token'); } catch { /* ignore */ }
   }, []);
 
+  const isAuthenticated = Boolean(token);
+
   return (
-    <AuthContext.Provider value={{ token, login, logout }}>
+    <AuthContext.Provider value={{ token, isAuthenticated, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

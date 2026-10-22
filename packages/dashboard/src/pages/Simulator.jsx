@@ -7,15 +7,16 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
-import { apiGet, apiPost } from '../api/client.js';
+import { apiGet, apiPost, asList } from '../api/client.js';
 
 const DRIFT_PRESETS = [
   { value: 'none', label: 'none (Valid baseline payment event)' },
   { value: 'added_field', label: 'added_field (extra unmapped field "taxId")' },
-  { value: 'type_changed', label: 'type_changed ("amount" sent as string instead of integer)' },
-  { value: 'removed_field', label: 'removed_field (required "currency" field omitted)' },
-  { value: 'nested_drift', label: 'nested_drift (nested object schema changed)' },
-  { value: 'array_type_changed', label: 'array_type_changed (array element type mutated)' },
+  { value: 'add_currency', label: 'add_currency (extra unmapped field "currency")' },
+  { value: 'amount_string', label: 'amount_string ("amount" sent as string instead of integer)' },
+  { value: 'remove_utr', label: 'remove_utr (required "utr" field omitted)' },
+  { value: 'remove_orderId', label: 'remove_orderId (required "orderId" field omitted)' },
+  { value: 'all', label: 'all (combined drift mutations)' },
 ];
 
 export default function Simulator() {
@@ -37,7 +38,7 @@ export default function Simulator() {
     setLoading(true);
     try {
       const data = await apiGet('/api/sources', token);
-      const list = data?.sources || data || [];
+      const list = asList(data, 'sources', '/api/sources');
       setSources(list);
       if (list.length > 0) {
         setSourceId((prev) => prev || list[0]._id || list[0].id);
@@ -62,25 +63,30 @@ export default function Simulator() {
     setError('');
     setSimulating(true);
 
-    const newResults = [];
+    const selectedSource = sources.find((s) => (s._id || s.id) === sourceId);
+    const sourceSlug = selectedSource?.slug || 'sim-payments';
+
     try {
-      for (let i = 0; i < count; i++) {
-        const res = await apiPost('/api/simulate', token, {
-          sourceId,
-          eventType: eventType.trim(),
-          driftPreset,
-        });
-        newResults.unshift({
-          timestamp: new Date().toLocaleTimeString(),
-          eventId: res.eventId,
-          sourceSlug: res.sourceSlug,
-          eventType: res.eventType,
-          driftPreset: res.driftPreset,
-          status: res.status || 'received',
-          success: true,
-        });
-      }
-      setResults((prev) => [...newResults, ...prev].slice(0, 50));
+      const payload = {
+        sourceId,
+        sourceSlug,
+        eventType: eventType.trim(),
+        driftPreset,
+        drift: driftPreset === 'added_field' ? 'add_currency' : driftPreset,
+        count: Number(count) || 1,
+        duplicates: 0,
+      };
+      const res = await apiPost('/api/simulate', token, payload);
+      const newResult = {
+        timestamp: new Date().toLocaleTimeString(),
+        sourceSlug,
+        eventType: eventType.trim(),
+        driftPreset,
+        eventId: res.eventId || `${res.accepted ?? 1} accepted`,
+        status: res.status || (res.accepted > 0 ? 'accepted' : 'sent'),
+        success: true,
+      };
+      setResults((prev) => [newResult, ...prev].slice(0, 50));
     } catch (err) {
       setError(`Simulation failed: ${err.friendlyMessage || err.message}`);
     } finally {

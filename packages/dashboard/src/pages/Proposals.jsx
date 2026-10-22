@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useSse } from '../context/SseContext.jsx';
-import { apiGet, apiPost, apiPatch } from '../api/client.js';
+import { apiGet, apiPost, apiPatch, asList } from '../api/client.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 
 function DiffItem({ path, change }) {
@@ -21,7 +21,7 @@ function DiffItem({ path, change }) {
   );
 }
 
-function ProposalDrawer({ proposal, onClose, onUpdate }) {
+export function ProposalDrawer({ proposal, onClose, onUpdate }) {
   const { token } = useAuth();
   const [schema, setSchema] = useState(() => {
     try { return JSON.stringify(proposal.proposedSchema, null, 2); }
@@ -175,7 +175,7 @@ export default function Proposals() {
     setLoading(true); setError('');
     try {
       const data = await apiGet('/api/proposals', token);
-      setProposals(data?.proposals || data || []);
+      setProposals(asList(data, 'items', '/api/proposals'));
     } catch (e) {
       setError(e.friendlyMessage || e.message);
     } finally {

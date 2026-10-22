@@ -248,3 +248,40 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
 | `Simulator` | `GET /api/sources` | Array of objects `[{ _id, slug, name, adapter, active, ... }]` | `data?.sources \|\| data \|\| []` | **Yes** |
 | `Simulator` | `POST /api/simulate` | Object `{ sent: Number, accepted: Number, deduplicated: Number, statuses: Object }` | Sent `{ sourceId, eventType, driftPreset }`, expected `{ eventId, sourceSlug, eventType, driftPreset, status }` | **Yes** |
 | `App/SSE` | `GET /api/sse` | Text EventStream `event: ...\ndata: ...\n\n` | `parseSseChunk` parser stream | No |
+
+## Phase 3B Housekeeping — STEP 2 Tests First [DONE]
+- Added cross-package contract test `packages/api/test/integration/dashboardContract.test.js`:
+  - Starts real `createApp` with `MongoMemoryReplSet` and in-memory queue.
+  - Seeds a source, a schema, events in multiple statuses (`delivered`, `quarantined`, `failed`), a quarantine entry, and a proposal.
+  - Validates normalised return values across all endpoints called by the dashboard API client: list endpoints return arrays, counts are numbers, and detail endpoints return expected objects.
+- Added page-level real-shape tests in `packages/dashboard/test/pagesRealShapes.test.jsx`:
+  - Renders all 7 pages (`LiveFeed`, `Quarantine`, `Proposals` list and drawer, `Schemas`, `Sources`, `Status`, `Simulator`).
+  - Covers loading, empty, populated, and error states using fixtures copied directly from live curl output of the real stack.
+  - Verified suites failed prior to fixes (confirming reproduction of both LiveFeed TypeError and Proposals blank screen).
+
+## Phase 3B Housekeeping — STEP 3 Fix [DONE]
+- **API Client Normalisation (`packages/dashboard/src/api/client.js`):**
+  - Added helper `asList(data, key, endpoint)` that unwraps raw arrays, `{ [key]: Array }`, or `{ items: Array }` and throws a clear descriptive error naming the endpoint on shape mismatch.
+  - Exported domain-specific client helpers (`getEvents`, `getQuarantine`, `getProposals`, `getProposal`, `getSchemas`, `getSources`, `getStats`, `setApiBase`).
+  - Removed ad-hoc `(data.items || data || []).map` patterns across all dashboard pages.
+- **React ErrorBoundary (`packages/dashboard/src/components/ErrorBoundary.jsx`):**
+  - Added ErrorBoundary wrapped around `<Outlet />` in `packages/dashboard/src/components/Layout.jsx`.
+  - Displays readable card with failing page name, a "Try again" reset button, and dev-only stack message.
+- **Fixed All Dashboard Page Mismatches:**
+  - `LiveFeed.jsx`: uses `asList(data, 'items', '/api/events')` to handle real `{ items, page, limit, total }` response.
+  - `Proposals.jsx`: uses `asList(data, 'items', '/api/proposals')` to handle real `{ items, page, limit, total }` response; eliminated blank white screen crash.
+  - `Quarantine.jsx`: correctly parses quarantine groups array and provides fallback display.
+  - `Schemas.jsx`: uses `asList` for both schemas and sources endpoints.
+  - `Sources.jsx`: uses `s.active` boolean (instead of `s.disabled`) for status badge and toggle payload (`{ active: !isActive }`).
+  - `Status.jsx`: correctly maps `data.byStatus` counters and `data.pendingProposals`.
+  - `Simulator.jsx`: sends `{ sourceSlug, count, duplicates, drift }` conforming to `POST /api/simulate` API while maintaining legacy test compatibility.
+  - Preserved loading, empty, and error states on every list page.
+  - Fixed `AuthContext.jsx` to export `isAuthenticated`.
+
+## Phase 3B Housekeeping — STEP 4 Verification [DONE]
+- `npm test`: 30 test files passed, 299 tests passed (0 failed).
+- `npm run exit-test:phase3b`: ALL SCENARIOS PASSED (Scenarios A through H).
+- `npm run build:dashboard`: Production Vite build succeeded (dist/index.html generated).
+- Verified contract testing against real app (`dashboardContract.test.js`).
+- Updated `docs/SPEC.md` with "Dashboard/API Contract" section in Section 7.
+

@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSse } from '../context/SseContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
-import { apiGet } from '../api/client.js';
+import { apiGet, asList } from '../api/client.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 
 const MAX_ENTRIES = 200;
@@ -44,8 +44,8 @@ export default function LiveFeed() {
     setError('');
     try {
       const data = await apiGet('/api/events?limit=100', token);
-      const events = (data?.events || data || []).map((ev) => ({
-        id:          ev._id || ev.id,
+      const events = asList(data, 'items', '/api/events').map((ev) => ({
+        id:          ev._id || ev.id || ev.eventId,
         sourceSlug:  ev.sourceSlug,
         eventType:   ev.eventType,
         status:      ev.status,

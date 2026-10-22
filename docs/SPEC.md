@@ -623,7 +623,25 @@ Primary ingest endpoint. Parses raw body bytes specifically for HMAC verificatio
 | `POST` | `/api/proposals/:id/approve` | Execute atomic schema activation and event re-queue |
 | `POST` | `/api/proposals/:id/reject` | Reject proposal (quarantined events stay quarantined) |
 
+### Dashboard/API Contract
+
+The dashboard client (`packages/dashboard/src/api/client.js`) and pages interact with the API endpoints according to the following strict response contract:
+
+| Endpoint | Method | Response Top-Level Shape | Guarding Contract Test |
+|---|---|---|---|
+| `/api/events` | `GET` | Object `{ items: Array, page: Number, limit: Number, total: Number }` | `packages/api/test/integration/dashboardContract.test.js` |
+| `/api/proposals` | `GET` | Object `{ items: Array, page: Number, limit: Number, total: Number }` | `packages/api/test/integration/dashboardContract.test.js` |
+| `/api/proposals/:id` | `GET` | Object `{ _id, sourceId, eventType, driftFingerprint, status, baseSchemaVersion, proposedSchema, diff: Array, affectedEventCount, aiUsed, ... }` | `packages/api/test/integration/dashboardContract.test.js` |
+| `/api/quarantine` | `GET` | Array `[{ driftFingerprint: String, sourceId: ObjectId, eventType: String, count: Number, firstSeen: Date, lastSeen: Date, samplePayload: Object, proposalId: ObjectId }]` | `packages/api/test/integration/dashboardContract.test.js` |
+| `/api/schemas` | `GET` | Array `[{ _id, version: Number, eventType: String, sourceId: ObjectId, active: Boolean, schema: Object, createdAt: Date, activatedAt: Date }]` | `packages/api/test/integration/dashboardContract.test.js` |
+| `/api/sources` | `GET` | Array `[{ _id, slug: String, name: String, adapter: String, active: Boolean, downstreamUrl: String, secretEnvVar: String, createdAt: Date, updatedAt: Date }]` | `packages/api/test/integration/dashboardContract.test.js` |
+| `/api/stats` | `GET` | Object `{ byStatus: { received, processing, delivered, quarantined, failed, dead, requeue_pending }, last24h: Array, queues: Object, pendingProposals: Number, sseClients: Number }` | `packages/api/test/integration/dashboardContract.test.js` |
+| `/api/simulate` | `POST` | Object `{ sent: Number, accepted: Number, deduplicated: Number, statuses: Object }` | `packages/api/test/integration/dashboardContract.test.js` |
+
+All array lists are validated and unwrapped in the dashboard client using `asList(data, key, endpoint)` which verifies that either the response is directly an array or matches `{ [key]: Array }` / `{ items: Array }`, throwing a descriptive error naming the endpoint on any shape mismatch.
+
 ---
+
 
 ### GET /api/sse (Server-Sent Events)
 

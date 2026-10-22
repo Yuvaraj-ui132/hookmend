@@ -32,6 +32,7 @@ export default function LoginPage() {
         setLoading(false);
         return;
       }
+      setLoading(false);
       login(value.trim(), remember);
     } catch {
       setError('Could not reach the API. Check VITE_API_BASE_URL.');

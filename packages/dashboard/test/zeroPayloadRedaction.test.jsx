@@ -10,12 +10,16 @@ import { AuthProvider } from '../src/context/AuthContext.jsx';
 import { SseProvider } from '../src/context/SseContext.jsx';
 
 // Mock client calls
-vi.mock('../src/api/client.js', () => ({
-  apiGet: vi.fn(),
-  apiPost: vi.fn(),
-  apiPatch: vi.fn(),
-  apiDel: vi.fn(),
-}));
+vi.mock('../src/api/client.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    apiGet: vi.fn(),
+    apiPost: vi.fn(),
+    apiPatch: vi.fn(),
+    apiDel: vi.fn(),
+  };
+});
 
 import { apiGet } from '../src/api/client.js';
 

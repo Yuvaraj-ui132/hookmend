@@ -14,6 +14,7 @@ export default function Status() {
   const { sseStatus, addRefetchCallback } = useSse();
 
   const [stats, setStats] = useState(null);
+  const [sourcesCount, setSourcesCount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -21,8 +22,33 @@ export default function Status() {
   const fetchStats = useCallback(async () => {
     setError('');
     try {
-      const data = await apiGet('/api/stats', token);
-      setStats(data);
+      const [data, srcData] = await Promise.all([
+        apiGet('/api/stats', token),
+        apiGet('/api/sources', token).catch(() => null),
+      ]);
+      const byStatus = data?.byStatus || data?.events || {};
+      const eventCounts = {
+        received: Number(byStatus.received || 0),
+        processing: Number(byStatus.processing || 0),
+        delivered: Number(byStatus.delivered || 0),
+        quarantined: Number(byStatus.quarantined || 0),
+        failed: Number(byStatus.failed || 0),
+        dead: Number(byStatus.dead || 0),
+        requeue_pending: Number(byStatus.requeue_pending || 0),
+      };
+      setStats({
+        ...data,
+        byStatus,
+        eventCounts,
+        pendingProposals: typeof data?.pendingProposals === 'number' ? data.pendingProposals : Number(data?.proposals?.pending_review || 0),
+        sseClients: Number(data?.sseClients || 0),
+        queues: data?.queues || {},
+      });
+      if (Array.isArray(srcData)) {
+        setSourcesCount(srcData.length);
+      } else if (Array.isArray(srcData?.sources)) {
+        setSourcesCount(srcData.sources.length);
+      }
       setLastUpdated(new Date());
     } catch (e) {
       setError(e.friendlyMessage || e.message);
@@ -42,8 +68,8 @@ export default function Status() {
     };
   }, [fetchStats, addRefetchCallback]);
 
-  const eventCounts = stats?.events || {};
-  const proposalCounts = stats?.proposals || {};
+  const eventCounts = stats?.eventCounts || stats?.byStatus || stats?.events || {};
+  const pendingProposals = stats?.pendingProposals ?? stats?.proposals?.pending_review ?? 0;
   const queueCounts = stats?.queues || {};
 
   return (
@@ -75,7 +101,7 @@ export default function Status() {
           <div className="stats-grid">
             <div className="stat-card">
               <div className="stat-label">Active Sources</div>
-              <div className="stat-value">{stats?.sourcesCount ?? 0}</div>
+              <div className="stat-value">{sourcesCount ?? stats?.sourcesCount ?? 0}</div>
               <div className="stat-sub">Registered endpoints</div>
             </div>
 
@@ -99,7 +125,7 @@ export default function Status() {
 
             <div className="stat-card">
               <div className="stat-label">Pending Proposals</div>
-              <div className="stat-value text-accent">{proposalCounts.pending_review ?? 0}</div>
+              <div className="stat-value text-accent">{pendingProposals}</div>
               <div className="stat-sub">Awaiting admin review</div>
             </div>
 

@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useSse } from '../context/SseContext.jsx';
-import { apiGet, apiPost, apiPatch, apiDel } from '../api/client.js';
+import { apiGet, apiPost, apiPatch, apiDel, asList } from '../api/client.js';
 
 export default function Sources() {
   const { token } = useAuth();
@@ -36,7 +36,7 @@ export default function Sources() {
     setError('');
     try {
       const data = await apiGet('/api/sources', token);
-      setSources(data?.sources || data || []);
+      setSources(asList(data, 'sources', '/api/sources'));
     } catch (e) {
       setError(e.friendlyMessage || e.message);
     } finally {
@@ -84,9 +84,10 @@ export default function Sources() {
 
   async function handleToggleDisabled(s) {
     const id = s._id || s.id;
+    const isActive = s.active !== false && !s.disabled;
     try {
-      await apiPatch(`/api/sources/${id}`, token, { disabled: !s.disabled });
-      setMsg(`Source "${s.slug}" ${s.disabled ? 'enabled' : 'disabled'}.`);
+      await apiPatch(`/api/sources/${id}`, token, { active: !isActive });
+      setMsg(`Source "${s.slug}" ${isActive ? 'disabled' : 'enabled'}.`);
       fetchSources();
     } catch (err) {
       setError(`Failed to toggle: ${err.friendlyMessage || err.message}`);
@@ -264,18 +265,28 @@ export default function Sources() {
                       )}
                     </td>
                     <td>
-                      <span className={`badge ${s.disabled ? 'badge-danger' : 'badge-success'}`}>
-                        {s.disabled ? 'Disabled' : 'Active'}
-                      </span>
+                      {(() => {
+                        const isActive = s.active !== false && !s.disabled;
+                        return (
+                          <span className={`badge ${isActive ? 'badge-success' : 'badge-danger'}`}>
+                            {isActive ? 'Active' : 'Disabled'}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="text-right">
                       <div className="flex gap-2 justify-end">
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => handleToggleDisabled(s)}
-                        >
-                          {s.disabled ? 'Enable' : 'Disable'}
-                        </button>
+                        {(() => {
+                          const isActive = s.active !== false && !s.disabled;
+                          return (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => handleToggleDisabled(s)}
+                            >
+                              {isActive ? 'Disable' : 'Enable'}
+                            </button>
+                          );
+                        })()}
                         <button
                           className="btn btn-danger btn-sm"
                           onClick={() => handleDelete(s)}

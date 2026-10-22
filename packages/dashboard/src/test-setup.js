@@ -1,3 +1,8 @@
-// packages/dashboard/src/test-setup.js
-// Global test setup for @testing-library/react with vitest
 import '@testing-library/jest-dom/vitest';
+import { cleanup } from '@testing-library/react';
+import { afterEach } from 'vitest';
+
+afterEach(() => {
+  cleanup();
+});
+

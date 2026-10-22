@@ -208,17 +208,20 @@
 - Tested production bundle build with `vite build`
 - Tests: 262/262 tests passing across 28 test files
 
-## Phase 3B — STEP 6 — Exit Test Phase 3B Script [DONE]
-- Created and validated `packages/api/scripts/exit-test-phase3b.js` covering Scenarios A-F:
-  - MongoDB replica set and Redis reachability probe (fails fast with FATAL if unreachable)
-  - CORS header validation on `/api/*` vs `/ingest/*` (D40)
-  - Admin endpoints validation: sources CRUD (`name` required, `active` toggle, 204 delete) and `GET /api/stats` contract schema (`byStatus`, `last24h`, `queues`, `pendingProposals`, `sseClients`)
-  - GET /api/sse authentication, stream headers, and real-time event reception
-  - Webhook simulation with drift presets and zero payload leaks
-  - Dashboard production bundle integrity check
-  - Clean Windows async libuv handle teardown
-- Added `"exit-test:phase3b"` script to root `package.json`
-- Tests: 262/262 tests passing across 28 test files; `npm run exit-test:phase3b` passes 100% cleanly.
+## Phase 3B — STEP 6 — Exit Test Phase 3B Script & Verification [DONE]
+- Rewrote `packages/api/scripts/exit-test-phase3b.js` to strictly assert Scenarios A through H:
+  - Scenario A: GET /api/sse without token returns 401 Unauthorized
+  - Scenario B: 3 valid events delivered via SSE (event.received and event.delivered) within 10s
+  - Scenario C: 5 drifted events via POST /api/simulate drift "all" deliver 5 event.quarantined and 1 proposal.created
+  - Scenario D: Approve proposal delivers proposal.approved and event.delivered for 5 events
+  - Scenario E: SSE heartbeat comment observed; zero payload, headers, or synthetic orderId/paymentId/utr leaks
+  - Scenario F: Force watcher restart delivers resync event and subsequent events flow
+  - Scenario G: POST /api/simulate with ENABLE_SIMULATOR_API=false returns 404
+  - Scenario H: Dashboard production build succeeds (dist/index.html exists) and dashboard tests pass
+- Added SSE client metrics (`sseClients`) to `GET /health` route
+- Configured configurable watcher backoff overrides (`SSE_WATCHER_MIN_BACKOFF_MS`, `SSE_WATCHER_MAX_BACKOFF_MS`)
+- Added Decision Log D33-D48, Vite major selection, and SSE architecture to `docs/SPEC.md`
+- Verification: 263/263 unit/integration tests passing; seed and exit-test for phase1, phase2, phase3a, phase3b all PASS.
 
 
 

@@ -373,4 +373,12 @@ describe('GET /api/sse', () => {
       }
     }
   }, 12000);
+
+  it('GET /health exposes sse status and sseClients count (D37)', async () => {
+    const res = await fetch(getUrl('/health'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.sse).toBe('connected');
+    expect(typeof body.sseClients).toBe('number');
+  });
 });

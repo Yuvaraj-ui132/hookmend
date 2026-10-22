@@ -35,7 +35,7 @@ export function createApp({ db, queue, config, watcher = null }) {
   app.use('/api', corsMiddleware);
 
   // Routes
-  app.use(createHealthRouter({ db, queue, config, watcher }));
+  app.use(createHealthRouter({ db, queue, config, watcher, sseClientCount: getClientCount }));
   app.use(createIngestRouter({ db, queue, config }));
   app.use('/api', sseRouter);
   app.use('/api', express.json(), createAdminRouter({

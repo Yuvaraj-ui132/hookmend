@@ -2,35 +2,35 @@
 /**
  * packages/api/scripts/exit-test-phase3b.js — Phase 3B Exit Test
  *
- * Runs against real docker-compose MongoDB replica set and Redis.
- * Verifies:
- *  - MongoDB & Redis reachability
- *  - SSE change stream watcher with real replica set
- *  - GET /api/sse authentication, fan-out, and event streaming
- *  - Admin REST endpoints (sources CRUD, stats)
- *  - CORS allow-list protection on /api/*
- *  - POST /api/simulate injecting synthetic events with drift presets
- *  - Real-time SSE delivery of event updates
- *  - Zero-payload assertion across all SSE messages and audit logs
- *  - Dashboard production bundle build and integrity
+ * Runs against real docker-compose MongoDB replica set and Redis (no in-memory fallback).
+ * Scenarios:
+ *  A) GET /api/sse without a token -> 401
+ *  B) 3 valid events -> SSE delivers event.received and event.delivered for all 3 within 10 s
+ *  C) 5 drifted events via POST /api/simulate drift "all" -> SSE delivers 5 event.quarantined and 1 proposal.created
+ *  D) approve the proposal -> SSE delivers proposal.approved and event.delivered for the 5 events
+ *  E) a heartbeat comment is observed; no SSE message contains "payload", "headers" or any synthetic orderId, paymentId or utr used in the run
+ *  F) force a watcher restart -> a resync event arrives and later events still flow
+ *  G) POST /api/simulate with the simulator flag off returns 404
+ *  H) the dashboard production build succeeds (dist/index.html exists) and the dashboard tests pass
  */
 
 import { MongoClient, ObjectId } from 'mongodb';
 import { Redis } from 'ioredis';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { execSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   connectDb,
   closeDb,
   createIndexes,
   createBullQueue,
-  QUEUE_NAMES,
   createSseWatcher,
 } from '@hookmend/common';
 import { createApp } from '../src/server.js';
-import { execSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { startReceiver } from '../../simulator/src/receiver.js';
+import { startWorkerApp } from '../../worker/src/main.js';
 
 const MONGODB_URI =
   process.env.MONGODB_URI ||
@@ -38,12 +38,12 @@ const MONGODB_URI =
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
 const DB_NAME = 'hookmend_exit_test_phase3b';
-const QUEUE_PREFIX = 'hookmend-test-p3b';
+const QUEUE_PREFIX = 'hookmend-test-3b';
 const ADMIN_API_TOKEN = 'test-phase3b-admin-token-secret-xyz';
 const SLUG = 'sim-payments-3b';
 
 async function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function waitForCondition(checkFn, timeoutMs = 20000, intervalMs = 150) {
@@ -59,11 +59,11 @@ async function waitForCondition(checkFn, timeoutMs = 20000, intervalMs = 150) {
 async function main() {
   console.log('[exit-test-phase3b] Starting Phase 3B Exit Test...');
 
-  // ── 0. Verify MongoDB and Redis Reachability ────────────────────────────────
+  // ── 0. Verify MongoDB & Redis reachability (No in-memory fallback) ──────────
   console.log(`[exit-test-phase3b] Probing MongoDB: ${MONGODB_URI}`);
   let mongoHost = 'unknown';
   try {
-    const mongoProbe = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 2000 });
+    const mongoProbe = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 2500 });
     await mongoProbe.connect();
     mongoHost = mongoProbe.options?.hosts?.[0] || 'localhost:27017';
     await mongoProbe.close();
@@ -71,14 +71,13 @@ async function main() {
   } catch (err) {
     console.error(`[exit-test-phase3b] FATAL: MongoDB unreachable at ${MONGODB_URI}`);
     console.error(err.message);
-    process.exitCode = 1;
-    return;
+    process.exit(1);
   }
 
   console.log(`[exit-test-phase3b] Probing Redis: ${REDIS_URL}`);
   let redisHost = 'unknown';
   try {
-    const redisProbe = new Redis(REDIS_URL, { connectTimeout: 2000, maxRetriesPerRequest: 1 });
+    const redisProbe = new Redis(REDIS_URL, { connectTimeout: 2500, maxRetriesPerRequest: 1 });
     const pong = await redisProbe.ping();
     if (pong !== 'PONG') throw new Error('Redis ping did not return PONG');
     redisHost = `${redisProbe.options.host}:${redisProbe.options.port}`;
@@ -94,8 +93,7 @@ async function main() {
   } catch (err) {
     console.error(`[exit-test-phase3b] FATAL: Redis unreachable at ${REDIS_URL}`);
     console.error(err.message);
-    process.exitCode = 1;
-    return;
+    process.exit(1);
   }
 
   // ── 1. Drop and recreate test database ─────────────────────────────────────
@@ -104,11 +102,17 @@ async function main() {
   await adminClient.db(DB_NAME).dropDatabase();
   await adminClient.close();
 
-  // ── 2. Connect DB, create indexes and seed initial source + schema ──────────
-  const mongoClient = await connectDb(MONGODB_URI, DB_NAME);
+  const mongoClient = await connectDb(MONGODB_URI);
   const db = mongoClient.db(DB_NAME);
   await createIndexes(db);
 
+  // ── 2. Start Downstream Receiver ───────────────────────────────────────────
+  const receiver = await startReceiver({ port: 0 });
+  const receiverPort = receiver.port;
+  const downstreamUrl = `http://127.0.0.1:${receiverPort}/receive`;
+  console.log(`[exit-test-phase3b] Receiver running on port ${receiverPort}`);
+
+  // ── 3. Seed Source and v1 Schema ───────────────────────────────────────────
   const secretValue = 'test_webhook_secret_3b_' + randomBytes(8).toString('hex');
   const secretEnvVar = 'EXIT_TEST_3B_SECRET';
   process.env[secretEnvVar] = secretValue;
@@ -118,7 +122,7 @@ async function main() {
     name: 'Sim Payments 3B',
     adapter: 'generic-hmac',
     secretEnvVar,
-    downstreamUrl: 'https://internal.test.corp/webhook',
+    downstreamUrl,
     active: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -127,67 +131,90 @@ async function main() {
 
   await db.collection('schemas').insertOne({
     sourceId,
-    eventType: 'payment.succeeded',
+    eventType: 'payment.created',
     version: 1,
     active: true,
     schema: {
+      $schema: 'http://json-schema.org/draft-07/schema#',
       type: 'object',
+      required: ['event', 'orderId', 'amount', 'amountPaise', 'utr', 'paymentId'],
       properties: {
-        id: { type: 'string' },
-        amount: { type: 'integer' },
-        currency: { type: 'string' },
+        event: { type: 'string' },
+        orderId: { type: 'string' },
+        amount: { type: 'number' },
+        amountPaise: { type: 'integer' },
+        utr: { type: 'string' },
+        paymentId: { type: 'string' },
       },
-      required: ['id', 'amount', 'currency'],
       additionalProperties: false,
     },
     createdAt: new Date(),
     updatedAt: new Date(),
   });
+  console.log(`[exit-test-phase3b] Seeded source ${SLUG} and v1 payment.created schema`);
 
-  console.log(`[exit-test-phase3b] Seeded source ${SLUG} (${sourceId}) and v1 schema`);
+  // ── 4. Initialize Queue and Workers ────────────────────────────────────────
+  const queue = createBullQueue({
+    redisUrl: REDIS_URL,
+    prefix: QUEUE_PREFIX,
+  });
 
-  // ── 3. Initialize BullMQ Queue ─────────────────────────────────────────────
-  const queue = createBullQueue(QUEUE_NAMES.WEBHOOK_EVENTS, REDIS_URL, QUEUE_PREFIX);
-
-  // ── 4. Initialize SSE Watcher and Start API Server ──────────────────────────
-  let watcher = null;
-  try {
-    watcher = await createSseWatcher({
-      db,
-      logger: {
-        info: () => {},
-        warn: () => {},
-        error: (err) => console.error('[exit-test-watcher-error]', err),
-      },
-    });
-    console.log('[exit-test-phase3b] SSE change stream watcher initialized');
-  } catch (err) {
-    console.log('[exit-test-phase3b] Standalone Mongo detected; SSE watcher disabled');
-  }
-
-  const serverConfig = {
+  const testConfig = {
+    PORT: 0,
+    NODE_ENV: 'test',
+    MONGODB_URI,
+    REDIS_URL,
+    QUEUE_PREFIX,
+    MAX_BODY_SIZE: 524288,
+    TIMESTAMP_TOLERANCE_SECONDS: 300,
+    INGEST_RATE_LIMIT_MAX: 10000,
+    INGEST_RATE_LIMIT_WINDOW_MS: 60000,
+    EVENT_TTL_DAYS: 14,
+    LOG_LEVEL: 'silent',
     ADMIN_API_TOKEN,
-    ENABLE_SSE: true,
+    PROCESS_EVENT_ATTEMPTS: 3,
+    PROCESS_EVENT_BACKOFF_BASE_MS: 500,
+    PROCESS_EVENT_BACKOFF_MAX_MS: 500,
+    DOWNSTREAM_TIMEOUT_MS: 3000,
+    ENABLE_AI: false,
     ENABLE_SIMULATOR_API: true,
     SIMULATOR_SOURCES: `${SLUG},sim-payments`,
     DASHBOARD_ORIGINS: 'http://localhost:5173',
     MAX_SSE_CLIENTS: 10,
-    SSE_HEARTBEAT_MS: 3000,
-    PORT: 0,
+    SSE_HEARTBEAT_MS: 500, // as requested: 500ms
+    SSE_WATCHER_MIN_BACKOFF_MS: 50, // test backoff override
+    SSE_WATCHER_MAX_BACKOFF_MS: 200,
+    REPLAY_MAX_EVENTS: 1000,
+    MAX_SCHEMA_BYTES: 102400,
   };
+
+  const workerApp = await startWorkerApp({
+    db,
+    queue,
+    config: {
+      ...testConfig,
+      RECONCILE_INTERVAL_MS: 300000,
+      ENABLE_AI: false,
+    },
+  });
+  console.log('[exit-test-phase3b] Worker app started');
+
+  // ── 5. Initialize SSE Watcher and API Server ───────────────────────────────
+  const watcher = createSseWatcher({ db, config: testConfig });
+  await watcher.start();
 
   const app = createApp({
     db,
     queue,
+    config: testConfig,
     watcher,
-    config: serverConfig,
   });
 
   const server = createServer(app);
   await new Promise((res) => server.listen(0, '127.0.0.1', res));
-  const port = server.address().port;
-  serverConfig.PORT = port;
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const apiPort = server.address().port;
+  testConfig.PORT = apiPort;
+  const baseUrl = `http://127.0.0.1:${apiPort}`;
   console.log(`[exit-test-phase3b] API server running at ${baseUrl}`);
 
   const authHeaders = {
@@ -195,112 +222,33 @@ async function main() {
     'Content-Type': 'application/json',
   };
 
+  const results = [];
   let sseAbort = null;
+  const sseEvents = [];
+  const rawChunks = [];
 
   try {
-    // ── Scenario A: CORS Header Enforcement (D40) ───────────────────────────
-    console.log('\n[Scenario A] Checking CORS Headers on /api/*');
-    const corsRes = await fetch(`${baseUrl}/api/stats`, {
-      method: 'GET',
-      headers: {
-        ...authHeaders,
-        Origin: 'http://localhost:5173',
-      },
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario A: GET /api/sse without a token -> 401
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[exit-test-phase3b] Running Scenario A: GET /api/sse without token...');
+    const noAuthRes = await fetch(`${baseUrl}/api/sse`);
+    const passA = noAuthRes.status === 401;
+    results.push({
+      scenario: 'Scenario A: GET /api/sse without token -> 401',
+      pass: passA,
+      detail: `got HTTP ${noAuthRes.status}`,
     });
-    const allowOrigin = corsRes.headers.get('access-control-allow-origin');
-    if (allowOrigin !== 'http://localhost:5173') {
-      throw new Error(`Expected Access-Control-Allow-Origin: http://localhost:5173, got: ${allowOrigin}`);
-    }
-    console.log('✓ CORS allow-list header correctly returned for http://localhost:5173');
 
-    // Ingest route must NEVER have CORS headers
-    const ingestCors = await fetch(`${baseUrl}/ingest/nonexistent`, {
-      method: 'OPTIONS',
-      headers: { Origin: 'http://localhost:5173' },
-    });
-    if (ingestCors.headers.get('access-control-allow-origin')) {
-      throw new Error('CORS header must NOT be attached to /ingest endpoints (D40)');
-    }
-    console.log('✓ Ingest route does not expose CORS headers (D40)');
-
-    // ── Scenario B: Admin Endpoints Validation (D38, D39, D46) ───────────────
-    console.log('\n[Scenario B] Testing Admin REST Endpoints');
-
-    // 1. Stats endpoint
-    const statsRes = await fetch(`${baseUrl}/api/stats`, { headers: authHeaders });
-    if (!statsRes.ok) throw new Error(`GET /api/stats failed: ${statsRes.status}`);
-    const stats = await statsRes.json();
-    if (
-      !stats.byStatus ||
-      typeof stats.byStatus.received !== 'number' ||
-      !Array.isArray(stats.last24h) ||
-      !stats.queues ||
-      typeof stats.pendingProposals !== 'number' ||
-      typeof stats.sseClients !== 'number'
-    ) {
-      throw new Error('GET /api/stats response structure invalid');
-    }
-    console.log(
-      `✓ GET /api/stats returned: ${stats.byStatus.received} received, ${stats.pendingProposals} pending proposals`
-    );
-
-    // 2. Sources CRUD
-    const createSrcRes = await fetch(`${baseUrl}/api/sources`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        slug: 'exit-test-temp-source',
-        name: 'Exit Test Temp Source',
-        adapter: 'generic-hmac',
-        secretEnvVar: 'EXIT_TEST_3B_SECRET',
-        downstreamUrl: 'https://api.test.corp/temp',
-      }),
-    });
-    if (!createSrcRes.ok) {
-      const errText = await createSrcRes.text();
-      throw new Error(`POST /api/sources failed (${createSrcRes.status}): ${errText}`);
-    }
-    const tempSrc = await createSrcRes.json();
-    const tempSrcId = tempSrc._id || tempSrc.id;
-    console.log(`✓ POST /api/sources created: ${tempSrcId}`);
-
-    // Patch source
-    const patchSrcRes = await fetch(`${baseUrl}/api/sources/${tempSrcId}`, {
-      method: 'PATCH',
-      headers: authHeaders,
-      body: JSON.stringify({ active: false }),
-    });
-    if (!patchSrcRes.ok) throw new Error(`PATCH /api/sources failed: ${patchSrcRes.status}`);
-    console.log(`✓ PATCH /api/sources updated source status`);
-
-    // Delete source
-    const delSrcRes = await fetch(`${baseUrl}/api/sources/${tempSrcId}`, {
-      method: 'DELETE',
-      headers: authHeaders,
-    });
-    if (!delSrcRes.ok && delSrcRes.status !== 204) throw new Error(`DELETE /api/sources failed: ${delSrcRes.status}`);
-    console.log(`✓ DELETE /api/sources removed source`);
-
-    // ── Scenario C: SSE Connection & Real-Time Event Streaming (D33-D37) ────
-    console.log('\n[Scenario C] Testing SSE Stream & Live Fan-out');
-    const sseMessages = [];
+    // Connect SSE client for subsequent scenarios
     sseAbort = new AbortController();
-
     const sseRes = await fetch(`${baseUrl}/api/sse`, {
       headers: { Authorization: `Bearer ${ADMIN_API_TOKEN}` },
       signal: sseAbort.signal,
     });
+    if (!sseRes.ok) throw new Error(`SSE connect failed: ${sseRes.status}`);
 
-    if (!sseRes.ok) {
-      throw new Error(`GET /api/sse returned HTTP ${sseRes.status}`);
-    }
-    const contentType = sseRes.headers.get('content-type');
-    if (!contentType?.includes('text/event-stream')) {
-      throw new Error(`Expected text/event-stream content-type, got: ${contentType}`);
-    }
-    console.log('✓ SSE connection established with text/event-stream');
-
-    // Read SSE stream in background
+    // Start background SSE reader
     (async () => {
       try {
         const reader = sseRes.body.getReader();
@@ -309,106 +257,282 @@ async function main() {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+          const chunkStr = decoder.decode(value, { stream: true });
+          rawChunks.push(chunkStr);
+          buffer += chunkStr;
           const parts = buffer.split('\n\n');
           buffer = parts.pop();
           for (const part of parts) {
-            sseMessages.push(part);
+            let evName = '';
+            let evData = '';
+            for (const line of part.split('\n')) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith('event:')) evName = trimmed.slice(6).trim();
+              else if (trimmed.startsWith('data:')) evData += trimmed.slice(5).trim();
+            }
+            if (evName || evData) {
+              let parsedData = evData;
+              try { parsedData = JSON.parse(evData); } catch {}
+              sseEvents.push({ event: evName, data: parsedData, raw: part });
+            }
           }
         }
       } catch (err) {
-        if (err.name !== 'AbortError') console.error('SSE read error:', err.message);
+        if (err.name !== 'AbortError') console.error('SSE reader closed:', err.message);
       }
     })();
 
-    // ── Scenario D: Webhook Simulation (D41) ──────────────────────────────────
-    console.log('\n[Scenario D] Dispatching Simulated Webhooks with Drift Presets');
-    const simRes = await fetch(`${baseUrl}/api/simulate`, {
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario B: 3 valid events -> SSE delivers event.received and event.delivered within 10s
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[exit-test-phase3b] Running Scenario B: 3 valid events -> event.received & event.delivered...');
+    const simBRes = await fetch(`${baseUrl}/api/simulate`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        sourceSlug: SLUG,
+        count: 3,
+        drift: 'none',
+      }),
+    });
+    if (!simBRes.ok) throw new Error(`POST /api/simulate (B) failed: ${simBRes.status}`);
+
+    await waitForCondition(() => {
+      const rec = sseEvents.filter((e) => e.event === 'event.received');
+      const del = sseEvents.filter((e) => e.event === 'event.delivered');
+      return rec.length >= 3 && del.length >= 3;
+    }, 10000, 150);
+
+    const recB = sseEvents.filter((e) => e.event === 'event.received').length;
+    const delB = sseEvents.filter((e) => e.event === 'event.delivered').length;
+    const passB = recB >= 3 && delB >= 3;
+    results.push({
+      scenario: 'Scenario B: 3 valid events -> SSE delivers event.received and event.delivered within 10s',
+      pass: passB,
+      detail: `event.received: ${recB}/3, event.delivered: ${delB}/3`,
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario C: 5 drifted events via POST /api/simulate drift "all" -> 5 event.quarantined & 1 proposal.created
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[exit-test-phase3b] Running Scenario C: 5 drifted events -> 5 event.quarantined & 1 proposal.created...');
+    const simCRes = await fetch(`${baseUrl}/api/simulate`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        sourceSlug: SLUG,
+        count: 5,
+        drift: 'all',
+      }),
+    });
+    if (!simCRes.ok) throw new Error(`POST /api/simulate (C) failed: ${simCRes.status}`);
+
+    await waitForCondition(() => {
+      const quar = sseEvents.filter((e) => e.event === 'event.quarantined');
+      const prop = sseEvents.filter((e) => e.event === 'proposal.created');
+      return quar.length >= 5 && prop.length >= 1;
+    }, 15000, 150);
+
+    const quarC = sseEvents.filter((e) => e.event === 'event.quarantined').length;
+    const propC = sseEvents.filter((e) => e.event === 'proposal.created').length;
+    const passC = quarC >= 5 && propC >= 1;
+    results.push({
+      scenario: 'Scenario C: 5 drifted events via POST /api/simulate drift "all" -> 5 event.quarantined and 1 proposal.created',
+      pass: passC,
+      detail: `event.quarantined: ${quarC}/5, proposal.created: ${propC}/1`,
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario D: Approve proposal -> SSE delivers proposal.approved and event.delivered for 5 events
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[exit-test-phase3b] Running Scenario D: Approve proposal -> proposal.approved & event.delivered...');
+    const proposalDoc = await waitForCondition(async () => {
+      return await db.collection('proposals').findOne({ status: 'pending_review' });
+    }, 5000, 100);
+
+    const approveRes = await fetch(`${baseUrl}/api/proposals/${proposalDoc._id}/approve`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ currentSchemaVersion: 1 }),
+    });
+    if (!approveRes.ok) {
+      const errText = await approveRes.text();
+      throw new Error(`Approve proposal failed: ${approveRes.status} ${errText}`);
+    }
+
+    // Wait for proposal.approved and 5 new event.delivered (total delivered >= 8)
+    await waitForCondition(() => {
+      const appEvt = sseEvents.filter((e) => e.event === 'proposal.approved');
+      const delEvt = sseEvents.filter((e) => e.event === 'event.delivered');
+      return appEvt.length >= 1 && delEvt.length >= 8;
+    }, 15000, 150);
+
+    const appD = sseEvents.filter((e) => e.event === 'proposal.approved').length;
+    const delD = sseEvents.filter((e) => e.event === 'event.delivered').length;
+    const passD = appD >= 1 && delD >= 8;
+    results.push({
+      scenario: 'Scenario D: approve proposal -> SSE delivers proposal.approved and event.delivered for 5 events',
+      pass: passD,
+      detail: `proposal.approved: ${appD}/1, total delivered: ${delD}/8`,
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario E: Heartbeat comment observed; no SSE contains payload, headers or synthetic IDs
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[exit-test-phase3b] Running Scenario E: Heartbeat observed & zero payload leak...');
+    const hasHeartbeat = rawChunks.some((chunk) => chunk.includes(': heartbeat'));
+
+    let leaksFound = 0;
+    for (const evt of sseEvents) {
+      const serialized = JSON.stringify(evt.data || '');
+      if (
+        serialized.includes('"payload"') ||
+        serialized.includes('"headers"') ||
+        serialized.includes('"ord-') ||
+        serialized.includes('"pay_') ||
+        serialized.includes('"UTR')
+      ) {
+        leaksFound++;
+      }
+    }
+
+    const passE = hasHeartbeat && leaksFound === 0;
+    results.push({
+      scenario: 'Scenario E: heartbeat comment observed and zero payload, headers, orderId, paymentId, utr leaks',
+      pass: passE,
+      detail: `heartbeat observed: ${hasHeartbeat}, leaks found: ${leaksFound}`,
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario F: Force watcher restart -> resync event arrives and later events still flow
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[exit-test-phase3b] Running Scenario F: Force watcher restart -> resync event...');
+    const preCount = sseEvents.length;
+    watcher.forceRestart();
+
+    await waitForCondition(() => {
+      return sseEvents.some((e) => e.event === 'resync');
+    }, 5000, 50);
+
+    const resyncEvts = sseEvents.filter((e) => e.event === 'resync').length;
+
+    // Send 1 more event after restart to confirm events still flow
+    await fetch(`${baseUrl}/api/simulate`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
         sourceSlug: SLUG,
         count: 1,
-        drift: 'added_field',
+        drift: 'none',
       }),
     });
 
-    if (!simRes.ok) {
-      const errBody = await simRes.text();
-      throw new Error(`POST /api/simulate failed (${simRes.status}): ${errBody}`);
-    }
-    const simData = await simRes.json();
-    if (simData.sent !== 1 || simData.accepted !== 1) {
-      throw new Error(`Simulation failed: expected 1 sent and 1 accepted, got ${JSON.stringify(simData)}`);
-    }
-    console.log(`✓ POST /api/simulate dispatched 1 event (accepted: ${simData.accepted})`);
+    await waitForCondition(() => {
+      const rec = sseEvents.filter((e) => e.event === 'event.received');
+      return rec.length >= 9; // 3 from B + 5 from C + 1 new = 9
+    }, 8000, 100);
 
-    // Verify event in DB
-    const eventDoc = await db.collection('events').findOne({ sourceSlug: SLUG });
-    if (!eventDoc) throw new Error('Simulated event not found in database');
-    console.log(`✓ Event persisted in DB with status: ${eventDoc.status}`);
+    const laterReceived = sseEvents.filter((e) => e.event === 'event.received').length;
+    const passF = resyncEvts >= 1 && laterReceived >= 9;
+    results.push({
+      scenario: 'Scenario F: force watcher restart -> resync event arrives and later events flow',
+      pass: passF,
+      detail: `resync count: ${resyncEvts}, later event.received total: ${laterReceived}/9`,
+    });
 
-    // Wait for SSE notification if watcher is active
-    if (watcher) {
-      console.log('[exit-test-phase3b] Waiting for SSE stream notifications...');
-      try {
-        await waitForCondition(() => sseMessages.length > 0, 8000, 200);
-        console.log(`✓ Received ${sseMessages.length} SSE message(s) through change stream watcher`);
-      } catch {
-        console.log('ℹ Note: No SSE messages received within timeout (acceptable if change stream buffer delay)');
-      }
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario G: POST /api/simulate with simulator flag off returns 404
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[exit-test-phase3b] Running Scenario G: POST /api/simulate with flag off -> 404...');
+    const disabledApp = createApp({
+      db,
+      queue,
+      config: { ...testConfig, ENABLE_SIMULATOR_API: false },
+    });
+    const disabledServer = createServer(disabledApp);
+    await new Promise((res) => disabledServer.listen(0, '127.0.0.1', res));
+    const disabledPort = disabledServer.address().port;
 
-    // ── Scenario E: Zero-Payload Privacy Enforcement (D22, D34, D46) ─────────
-    console.log('\n[Scenario E] Asserting Zero-Payload Leakage Across All SSE Messages');
-    for (const msg of sseMessages) {
-      if (msg.includes('customer_card') || msg.includes('secret_value') || msg.includes('rawBodyHash')) {
-        throw new Error(`CRITICAL: Payload value leaked in SSE stream: ${msg}`);
-      }
-    }
-    console.log('✓ Verified: Zero payload values, secrets, or rawBodyHash appeared in SSE messages');
+    const disabledRes = await fetch(`http://127.0.0.1:${disabledPort}/api/simulate`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ sourceSlug: SLUG }),
+    });
+    const passG = disabledRes.status === 404;
+    disabledServer.close();
 
-    // ── Scenario F: Dashboard Production Build Verification (D46) ─────────────
-    console.log('\n[Scenario F] Verifying Dashboard Production Bundle & Integrity');
-    const dashboardDist = resolve('packages/dashboard/dist');
-    const dashboardIndexHtml = resolve(dashboardDist, 'index.html');
+    results.push({
+      scenario: 'Scenario G: POST /api/simulate with simulator flag off returns 404',
+      pass: passG,
+      detail: `got HTTP ${disabledRes.status}`,
+    });
 
-    if (!existsSync(dashboardIndexHtml)) {
-      console.log('[exit-test-phase3b] Building dashboard bundle...');
-      execSync('npx vite build packages/dashboard', { stdio: 'inherit' });
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    // Scenario H: Dashboard production build succeeds and dashboard tests pass
+    // ═════════════════════════════════════════════════════════════════════════
+    console.log('\n[exit-test-phase3b] Running Scenario H: Dashboard build and tests...');
+    execSync('npx vite build packages/dashboard', { stdio: 'pipe' });
+    const distHtmlExists = existsSync(resolve('packages/dashboard/dist/index.html'));
 
-    if (!existsSync(dashboardIndexHtml)) {
-      throw new Error('Dashboard production build failed: dist/index.html not found');
-    }
-    const indexContent = readFileSync(dashboardIndexHtml, 'utf8');
-    if (!indexContent.includes('Hookmend')) {
-      throw new Error('Dashboard index.html does not contain Hookmend title');
-    }
-    console.log('✓ Dashboard production build is valid (dist/index.html present with Hookmend shell)');
+    let testsPass = false;
+    try {
+      execSync('npx vitest run packages/dashboard/test', { stdio: 'pipe' });
+      testsPass = true;
+    } catch {}
 
-    console.log('\n========================================');
-    console.log('🎉 ALL PHASE 3B EXIT TEST SCENARIOS PASSED!');
-    console.log('========================================');
-    process.exitCode = 0;
+    const passH = distHtmlExists && testsPass;
+    results.push({
+      scenario: 'Scenario H: dashboard production build succeeds and dashboard tests pass',
+      pass: passH,
+      detail: `dist/index.html exists: ${distHtmlExists}, tests passed: ${testsPass}`,
+    });
+
   } finally {
     // ── Teardown ─────────────────────────────────────────────────────────────
+    console.log('\n[exit-test-phase3b] Cleaning up test resources...');
     if (sseAbort) {
       try { sseAbort.abort(); } catch {}
     }
     if (watcher) {
       try { await watcher.stop(); } catch {}
     }
+    if (workerApp) {
+      try { await workerApp.stop(); } catch {}
+    }
     if (server) {
       await new Promise((res) => server.close(res));
     }
-    if (queue) {
-      await queue.close();
+    if (receiver) {
+      try { await receiver.close(); } catch {}
     }
-    await closeDb();
+    if (queue) {
+      try { await queue.close(); } catch {}
+    }
+    try { await closeDb(); } catch {}
     delete process.env[secretEnvVar];
-    // Give libuv a short tick on Windows to flush closed handles
     await sleep(200);
+  }
+
+  // ── Results Summary ─────────────────────────────────────────────────────────
+  console.log('\n═══════════════════════════════════════════════════════════════');
+  console.log('            HOOKMEND PHASE 3B EXIT TEST RESULTS                ');
+  console.log('═══════════════════════════════════════════════════════════════');
+
+  let allPass = true;
+  for (const r of results) {
+    const mark = r.pass ? '✓ PASS' : '✗ FAIL';
+    console.log(`[${mark}] ${r.scenario}`);
+    console.log(`         (${r.detail})`);
+    if (!r.pass) allPass = false;
+  }
+  console.log('═══════════════════════════════════════════════════════════════\n');
+
+  if (allPass) {
+    console.log('[exit-test-phase3b] ALL SCENARIOS PASSED.');
+    process.exitCode = 0;
+  } else {
+    console.error('[exit-test-phase3b] ONE OR MORE SCENARIOS FAILED.');
+    process.exitCode = 1;
   }
 }
 

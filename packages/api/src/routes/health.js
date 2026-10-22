@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 
-export function createHealthRouter({ db, queue, config, watcher = null }) {
+export function createHealthRouter({ db, queue, config, watcher = null, sseClientCount = () => 0 }) {
   const router = Router();
 
   router.get('/health', async (req, res) => {
@@ -44,6 +44,7 @@ export function createHealthRouter({ db, queue, config, watcher = null }) {
       mongo: mongoStatus,
       redis: redisStatus,
       sse: sseStatus,
+      sseClients: typeof sseClientCount === 'function' ? sseClientCount() : 0,
       version: config.VERSION || '0.2.0',
       timestamp: new Date().toISOString(),
     });

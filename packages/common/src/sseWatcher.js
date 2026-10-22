@@ -22,10 +22,13 @@ const MAX_BACKOFF_MS = 30000;
  * @param {{ db: import('mongodb').Db, config: object }} options
  */
 export function createSseWatcher({ db, config = {} }) {
+  const minBackoff = config.SSE_WATCHER_MIN_BACKOFF_MS != null ? config.SSE_WATCHER_MIN_BACKOFF_MS : MIN_BACKOFF_MS;
+  const maxBackoff = config.SSE_WATCHER_MAX_BACKOFF_MS != null ? config.SSE_WATCHER_MAX_BACKOFF_MS : MAX_BACKOFF_MS;
+
   let status = 'reconnecting';
   let stream = null;
   let resumeToken = null;
-  let backoffMs = MIN_BACKOFF_MS;
+  let backoffMs = minBackoff;
   let stopped = false;
   let restartTimer = null;
 
@@ -86,7 +89,7 @@ export function createSseWatcher({ db, config = {} }) {
 
       stream.on('change', (change) => {
         resumeToken = change._id;
-        backoffMs = MIN_BACKOFF_MS; // reset on successful event
+        backoffMs = minBackoff; // reset on successful event
 
         const sseEvent = changeToSseEvent(change);
         if (sseEvent) {
@@ -144,7 +147,7 @@ export function createSseWatcher({ db, config = {} }) {
     }
 
     const delay = backoffMs;
-    backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+    backoffMs = Math.min(backoffMs * 2, maxBackoff);
 
     logger.info({ delayMs: delay }, 'Scheduling SSE change stream restart');
     restartTimer = setTimeout(() => {

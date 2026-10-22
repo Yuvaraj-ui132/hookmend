@@ -1,6 +1,6 @@
 {
   "name": "hookmend",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -16,7 +16,9 @@
     "exit-test:phase3a": "node packages/worker/scripts/exit-test-phase3a.js",
     "exit-test:phase3b": "node packages/api/scripts/exit-test-phase3b.js",
     "seed": "node infra/seed/seed.js",
-    "dev": "npm run dev --workspace=packages/api"
+    "dev": "npm run dev --workspace=packages/api",
+    "dev:dashboard": "npm run dev --workspace=packages/dashboard",
+    "build:dashboard": "npm run build --workspace=packages/dashboard"
   },
   "dependencies": {
     "ajv": "^8.20.0",

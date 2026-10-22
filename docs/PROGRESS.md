@@ -209,14 +209,16 @@
 - Tests: 262/262 tests passing across 28 test files
 
 ## Phase 3B — STEP 6 — Exit Test Phase 3B Script [DONE]
-- Created `packages/api/scripts/exit-test-phase3b.js` covering Scenarios A-F:
+- Created and validated `packages/api/scripts/exit-test-phase3b.js` covering Scenarios A-F:
   - MongoDB replica set and Redis reachability probe (fails fast with FATAL if unreachable)
   - CORS header validation on `/api/*` vs `/ingest/*` (D40)
-  - Admin endpoints validation (sources CRUD, stats, schemas)
-  - GET /api/sse authentication, stream headers, and event reception
+  - Admin endpoints validation: sources CRUD (`name` required, `active` toggle, 204 delete) and `GET /api/stats` contract schema (`byStatus`, `last24h`, `queues`, `pendingProposals`, `sseClients`)
+  - GET /api/sse authentication, stream headers, and real-time event reception
   - Webhook simulation with drift presets and zero payload leaks
   - Dashboard production bundle integrity check
+  - Clean Windows async libuv handle teardown
 - Added `"exit-test:phase3b"` script to root `package.json`
-- Tests: 262/262 passing; exit test fails fast with clean FATAL when MongoDB is offline
+- Tests: 262/262 tests passing across 28 test files; `npm run exit-test:phase3b` passes 100% cleanly.
+
 
 

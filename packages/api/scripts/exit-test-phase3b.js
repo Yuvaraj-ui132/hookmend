@@ -7,10 +7,10 @@
  *  - MongoDB & Redis reachability
  *  - SSE change stream watcher with real replica set
  *  - GET /api/sse authentication, fan-out, and event streaming
- *  - Admin REST endpoints (sources CRUD, schemas, stats)
+ *  - Admin REST endpoints (sources CRUD, stats)
  *  - CORS allow-list protection on /api/*
  *  - POST /api/simulate injecting synthetic events with drift presets
- *  - Real-time SSE delivery of event and proposal updates
+ *  - Real-time SSE delivery of event updates
  *  - Zero-payload assertion across all SSE messages and audit logs
  *  - Dashboard production bundle build and integrity
  */
@@ -18,7 +18,7 @@
 import { MongoClient, ObjectId } from 'mongodb';
 import { Redis } from 'ioredis';
 import { createServer } from 'node:http';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import {
   connectDb,
   closeDb,
@@ -71,7 +71,8 @@ async function main() {
   } catch (err) {
     console.error(`[exit-test-phase3b] FATAL: MongoDB unreachable at ${MONGODB_URI}`);
     console.error(err.message);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   console.log(`[exit-test-phase3b] Probing Redis: ${REDIS_URL}`);
@@ -93,7 +94,8 @@ async function main() {
   } catch (err) {
     console.error(`[exit-test-phase3b] FATAL: Redis unreachable at ${REDIS_URL}`);
     console.error(err.message);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   // ── 1. Drop and recreate test database ─────────────────────────────────────
@@ -103,7 +105,8 @@ async function main() {
   await adminClient.close();
 
   // ── 2. Connect DB, create indexes and seed initial source + schema ──────────
-  const db = await connectDb(MONGODB_URI, DB_NAME);
+  const mongoClient = await connectDb(MONGODB_URI, DB_NAME);
+  const db = mongoClient.db(DB_NAME);
   await createIndexes(db);
 
   const secretValue = 'test_webhook_secret_3b_' + randomBytes(8).toString('hex');
@@ -112,10 +115,11 @@ async function main() {
 
   const sourceInsert = await db.collection('sources').insertOne({
     slug: SLUG,
+    name: 'Sim Payments 3B',
     adapter: 'generic-hmac',
     secretEnvVar,
     downstreamUrl: 'https://internal.test.corp/webhook',
-    disabled: false,
+    active: true,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
@@ -161,23 +165,28 @@ async function main() {
     console.log('[exit-test-phase3b] Standalone Mongo detected; SSE watcher disabled');
   }
 
+  const serverConfig = {
+    ADMIN_API_TOKEN,
+    ENABLE_SSE: true,
+    ENABLE_SIMULATOR_API: true,
+    SIMULATOR_SOURCES: `${SLUG},sim-payments`,
+    DASHBOARD_ORIGINS: 'http://localhost:5173',
+    MAX_SSE_CLIENTS: 10,
+    SSE_HEARTBEAT_MS: 3000,
+    PORT: 0,
+  };
+
   const app = createApp({
     db,
     queue,
     watcher,
-    config: {
-      ADMIN_API_TOKEN,
-      ENABLE_SSE: true,
-      ENABLE_SIMULATOR_API: true,
-      CORS_ORIGIN: 'http://localhost:5173',
-      MAX_SSE_CLIENTS: 10,
-      SSE_HEARTBEAT_MS: 3000,
-    },
+    config: serverConfig,
   });
 
   const server = createServer(app);
   await new Promise((res) => server.listen(0, '127.0.0.1', res));
   const port = server.address().port;
+  serverConfig.PORT = port;
   const baseUrl = `http://127.0.0.1:${port}`;
   console.log(`[exit-test-phase3b] API server running at ${baseUrl}`);
 
@@ -185,6 +194,8 @@ async function main() {
     Authorization: `Bearer ${ADMIN_API_TOKEN}`,
     'Content-Type': 'application/json',
   };
+
+  let sseAbort = null;
 
   try {
     // ── Scenario A: CORS Header Enforcement (D40) ───────────────────────────
@@ -219,10 +230,19 @@ async function main() {
     const statsRes = await fetch(`${baseUrl}/api/stats`, { headers: authHeaders });
     if (!statsRes.ok) throw new Error(`GET /api/stats failed: ${statsRes.status}`);
     const stats = await statsRes.json();
-    if (typeof stats.sourcesCount !== 'number' || !stats.events) {
+    if (
+      !stats.byStatus ||
+      typeof stats.byStatus.received !== 'number' ||
+      !Array.isArray(stats.last24h) ||
+      !stats.queues ||
+      typeof stats.pendingProposals !== 'number' ||
+      typeof stats.sseClients !== 'number'
+    ) {
       throw new Error('GET /api/stats response structure invalid');
     }
-    console.log(`✓ GET /api/stats returned: ${stats.sourcesCount} sources, ${stats.events.received || 0} received`);
+    console.log(
+      `✓ GET /api/stats returned: ${stats.byStatus.received} received, ${stats.pendingProposals} pending proposals`
+    );
 
     // 2. Sources CRUD
     const createSrcRes = await fetch(`${baseUrl}/api/sources`, {
@@ -230,12 +250,16 @@ async function main() {
       headers: authHeaders,
       body: JSON.stringify({
         slug: 'exit-test-temp-source',
+        name: 'Exit Test Temp Source',
         adapter: 'generic-hmac',
         secretEnvVar: 'EXIT_TEST_3B_SECRET',
         downstreamUrl: 'https://api.test.corp/temp',
       }),
     });
-    if (!createSrcRes.ok) throw new Error(`POST /api/sources failed: ${createSrcRes.status}`);
+    if (!createSrcRes.ok) {
+      const errText = await createSrcRes.text();
+      throw new Error(`POST /api/sources failed (${createSrcRes.status}): ${errText}`);
+    }
     const tempSrc = await createSrcRes.json();
     const tempSrcId = tempSrc._id || tempSrc.id;
     console.log(`✓ POST /api/sources created: ${tempSrcId}`);
@@ -244,23 +268,23 @@ async function main() {
     const patchSrcRes = await fetch(`${baseUrl}/api/sources/${tempSrcId}`, {
       method: 'PATCH',
       headers: authHeaders,
-      body: JSON.stringify({ disabled: true }),
+      body: JSON.stringify({ active: false }),
     });
     if (!patchSrcRes.ok) throw new Error(`PATCH /api/sources failed: ${patchSrcRes.status}`);
-    console.log(`✓ PATCH /api/sources disabled source`);
+    console.log(`✓ PATCH /api/sources updated source status`);
 
     // Delete source
     const delSrcRes = await fetch(`${baseUrl}/api/sources/${tempSrcId}`, {
       method: 'DELETE',
       headers: authHeaders,
     });
-    if (!delSrcRes.ok) throw new Error(`DELETE /api/sources failed: ${delSrcRes.status}`);
+    if (!delSrcRes.ok && delSrcRes.status !== 204) throw new Error(`DELETE /api/sources failed: ${delSrcRes.status}`);
     console.log(`✓ DELETE /api/sources removed source`);
 
     // ── Scenario C: SSE Connection & Real-Time Event Streaming (D33-D37) ────
     console.log('\n[Scenario C] Testing SSE Stream & Live Fan-out');
     const sseMessages = [];
-    const sseAbort = new AbortController();
+    sseAbort = new AbortController();
 
     const sseRes = await fetch(`${baseUrl}/api/sse`, {
       headers: { Authorization: `Bearer ${ADMIN_API_TOKEN}` },
@@ -303,9 +327,9 @@ async function main() {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
-        sourceId: sourceId.toString(),
-        eventType: 'payment.succeeded',
-        driftPreset: 'added_field',
+        sourceSlug: SLUG,
+        count: 1,
+        drift: 'added_field',
       }),
     });
 
@@ -314,13 +338,13 @@ async function main() {
       throw new Error(`POST /api/simulate failed (${simRes.status}): ${errBody}`);
     }
     const simData = await simRes.json();
-    if (!simData.simulated || !simData.eventId) {
-      throw new Error('Simulation response missing simulated:true or eventId');
+    if (simData.sent !== 1 || simData.accepted !== 1) {
+      throw new Error(`Simulation failed: expected 1 sent and 1 accepted, got ${JSON.stringify(simData)}`);
     }
-    console.log(`✓ POST /api/simulate dispatched event ${simData.eventId} (status: ${simData.status})`);
+    console.log(`✓ POST /api/simulate dispatched 1 event (accepted: ${simData.accepted})`);
 
     // Verify event in DB
-    const eventDoc = await db.collection('events').findOne({ _id: new ObjectId(simData.eventId) });
+    const eventDoc = await db.collection('events').findOne({ sourceSlug: SLUG });
     if (!eventDoc) throw new Error('Simulated event not found in database');
     console.log(`✓ Event persisted in DB with status: ${eventDoc.status}`);
 
@@ -363,26 +387,33 @@ async function main() {
     }
     console.log('✓ Dashboard production build is valid (dist/index.html present with Hookmend shell)');
 
-    // Clean up SSE connection
-    sseAbort.abort();
-
     console.log('\n========================================');
     console.log('🎉 ALL PHASE 3B EXIT TEST SCENARIOS PASSED!');
     console.log('========================================');
+    process.exitCode = 0;
   } finally {
     // ── Teardown ─────────────────────────────────────────────────────────────
-    if (watcher) {
-      try { await watcher.close(); } catch {}
+    if (sseAbort) {
+      try { sseAbort.abort(); } catch {}
     }
-    await new Promise((res) => server.close(res));
-    await queue.close();
+    if (watcher) {
+      try { await watcher.stop(); } catch {}
+    }
+    if (server) {
+      await new Promise((res) => server.close(res));
+    }
+    if (queue) {
+      await queue.close();
+    }
     await closeDb();
     delete process.env[secretEnvVar];
+    // Give libuv a short tick on Windows to flush closed handles
+    await sleep(200);
   }
 }
 
 main().catch((err) => {
   console.error('\n❌ PHASE 3B EXIT TEST FAILED:');
   console.error(err);
-  process.exit(1);
+  process.exitCode = 1;
 });

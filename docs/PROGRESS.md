@@ -285,3 +285,29 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
 - Verified contract testing against real app (`dashboardContract.test.js`).
 - Updated `docs/SPEC.md` with "Dashboard/API Contract" section in Section 7.
 
+## Phase 4 STEP 1 — Tests First [DONE]
+- reconcile.test.js: 6 new failing tests for D52/C3 stale-processing re-enqueue rule
+- worker-knobs.test.js: 2 tests for D49 BullMQ lockDuration/stalledInterval/maxStalledCount wiring
+- phase4-hardening.test.js: 17 tests for D54(a) 413, D54(c) admin 401, D54(d) secure headers, D54(e) production token guard, D50 slow mode
+
+## Phase 4 STEP 2 — Code for D49, D50, D52, D54 [DONE]
+- D49: lockDuration/stalledInterval/maxStalledCount env vars wired in process-event/index.js; BullMQ defaults 30000/30000/1; added to .env.example
+- D50: receiver.js extended with slow mode (setMode('slow', delayMs) + POST /__mode {mode:'slow',delayMs})
+- D52/C3 fix: reconcile.js re-enqueues stale processing+failed events older than STALE_JOB_THRESHOLD_MS; conditional update prevents race; returns recoveredStaleProcessing
+- D54(d): secureHeaders.js middleware applied to /api routes
+- D54(e): config.js production guard rejects tokens shorter than 24 chars
+- processor.js: statusChangedAt added to all status transitions
+- 324 tests pass (32 files); commit 6ac86f7
+
+## Phase 4 STEP 3 — Chaos Test Runner (C1–C7) [DONE]
+- Implemented `packages/worker/scripts/chaos.js` implementing scenarios C1 through C7 per D51 & D52:
+  - C1: Worker SIGKILL mid-delivery (receiver slow 3s; BullMQ stalls recovered, exactly N delivered, 0 dead)
+  - C2: Redis outage during ingest (HTTP 200s remain fast <3000ms; delivery succeeds after Redis recovery)
+  - C3: Redis data loss (FLUSHALL mid-flight; reconcile job recovers stale processing; all delivered, 0 dead)
+  - C4: Duplicate storm (100 concurrent requests with identical delivery id; exactly 1 doc, 99 dedup, receiver sees 1 request)
+  - C5: Downstream outage < retry window (all events delivered after recovery, 0 dead)
+  - C6: Downstream outage > retry window (events transition to dead; operator admin requeue re-delivers all)
+  - C7: AI rate limit (mock 429; proposal created with aiUsed=false and aiFailureReason=AI_RATE_LIMITED)
+- Enforces strict real Docker Mongo + Redis check on startup; fails clearly with exit code 1 if unreachable (no in-memory fallback per D51).
+- Added `npm run chaos` script to root `package.json`.
+- Script automatically measures and writes `docs/CHAOS.md` from real execution results (no invented numbers).

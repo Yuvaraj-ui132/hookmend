@@ -201,6 +201,12 @@ async function pollRedisHealth(redisUrl, timeoutMs = 30000) {
 
 function createFakeRateLimitedAI() {
   return {
+    generate: async () => {
+      const err = new Error('Resource has been exhausted (429 Quota exceeded)');
+      err.status = 429;
+      err.code = 'RESOURCE_EXHAUSTED';
+      throw err;
+    },
     analyzeAndPropose: async () => {
       const err = new Error('Resource has been exhausted (429 Quota exceeded)');
       err.status = 429;

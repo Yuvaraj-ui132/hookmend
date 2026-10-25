@@ -113,92 +113,97 @@ async function main() {
   await adminClient.db(DB_NAME).dropDatabase();
   await adminClient.close();
 
-  const mongoClient = await connectDb(MONGODB_URI);
-  const db = mongoClient.db(DB_NAME);
-  await createIndexes(db);
-
-  // ── 2. Start Downstream Receiver ───────────────────────────────────────────
-  const receiver = await startReceiver({ port: 0 });
-  const receiverPort = receiver.port;
-  const downstreamUrl = `http://127.0.0.1:${receiverPort}/receive`;
-  console.log(`[exit-test-phase4] Receiver running on port ${receiverPort}`);
-
-  // ── 3. Seed Source and Schema ──────────────────────────────────────────────
-  const secretValue = 'test_webhook_secret_p4_' + randomBytes(8).toString('hex');
-  const secretEnvVar = 'EXIT_TEST_P4_SECRET';
-  process.env[secretEnvVar] = secretValue;
-
-  const sourceInsert = await db.collection('sources').insertOne({
-    slug: SLUG,
-    name: 'Sim Payments Phase 4',
-    adapter: 'generic-hmac',
-    secretEnvVar,
-    downstreamUrl,
-    active: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-  const sourceId = sourceInsert.insertedId;
-
-  await db.collection('schemas').insertOne({
-    sourceId,
-    eventType: 'payment.created',
-    version: 1,
-    active: true,
-    schema: {
-      $schema: 'http://json-schema.org/draft-07/schema#',
-      type: 'object',
-      required: ['orderId', 'amount', 'currency'],
-      properties: {
-        orderId: { type: 'string' },
-        amount: { type: 'number' },
-        currency: { type: 'string' },
-      },
-    },
-    createdAt: new Date(),
-  });
-
-  // ── 4. Start BullMQ Queue, API server, and Worker ─────────────────────────
-  const queue = createBullQueue({
-    redisUrl: REDIS_URL,
-    prefix: QUEUE_PREFIX,
-  });
-
-  const config = {
-    PORT: 0,
-    NODE_ENV: 'test',
-    MONGODB_URI,
-    REDIS_URL,
-    QUEUE_PREFIX,
-    ADMIN_API_TOKEN,
-    MAX_BODY_SIZE: 512, // Strict small limit for 413 test
-    DOWNSTREAM_TIMEOUT_MS: 5000,
-    ENABLE_AI: false,
-    LOG_LEVEL: 'silent',
-    ALLOW_PRIVATE_DOWNSTREAM: true,
-  };
-
-  const app = createApp({ db, queue, config });
-  const apiServer = createServer(app);
-  await new Promise((resolve) => apiServer.listen(0, resolve));
-  const apiPort = apiServer.address().port;
-  const apiBase = `http://127.0.0.1:${apiPort}`;
-  console.log(`[exit-test-phase4] API Server running on port ${apiPort}`);
-
-  const workerApp = await startWorkerApp({
-    db,
-    queue,
-    config: {
-      ...config,
-      STALE_JOB_THRESHOLD_MS: 3000,
-      WORKER_LOCK_DURATION_MS: '4000',
-      WORKER_STALLED_INTERVAL_MS: '2000',
-      WORKER_MAX_STALLED_COUNT: '3',
-    },
-  });
-  console.log('[exit-test-phase4] Worker started with Phase 4 configurable knobs');
+  let mongoClient = null;
+  let receiver = null;
+  let queue = null;
+  let apiServer = null;
+  let workerApp = null;
 
   try {
+    mongoClient = await connectDb(MONGODB_URI);
+    const db = mongoClient.db(DB_NAME);
+    await createIndexes(db);
+
+    // ── 2. Start Downstream Receiver ───────────────────────────────────────────
+    receiver = await startReceiver({ port: 0 });
+    const receiverPort = receiver.port;
+    const downstreamUrl = `http://127.0.0.1:${receiverPort}/receive`;
+    console.log(`[exit-test-phase4] Receiver running on port ${receiverPort}`);
+
+    // ── 3. Seed Source and Schema ──────────────────────────────────────────────
+    const secretValue = 'test_webhook_secret_p4_' + randomBytes(8).toString('hex');
+    const secretEnvVar = 'EXIT_TEST_P4_SECRET';
+    process.env[secretEnvVar] = secretValue;
+
+    const sourceInsert = await db.collection('sources').insertOne({
+      slug: SLUG,
+      name: 'Sim Payments Phase 4',
+      adapter: 'generic-hmac',
+      secretEnvVar,
+      downstreamUrl,
+      active: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const sourceId = sourceInsert.insertedId;
+
+    await db.collection('schemas').insertOne({
+      sourceId,
+      eventType: 'payment.created',
+      version: 1,
+      active: true,
+      schema: {
+        $schema: 'http://json-schema.org/draft-07/schema#',
+        type: 'object',
+        required: ['orderId', 'amount', 'currency'],
+        properties: {
+          orderId: { type: 'string' },
+          amount: { type: 'number' },
+          currency: { type: 'string' },
+        },
+      },
+      createdAt: new Date(),
+    });
+
+    // ── 4. Start BullMQ Queue, API server, and Worker ─────────────────────────
+    queue = createBullQueue({
+      redisUrl: REDIS_URL,
+      prefix: QUEUE_PREFIX,
+    });
+
+    const config = {
+      PORT: 0,
+      NODE_ENV: 'test',
+      MONGODB_URI,
+      REDIS_URL,
+      QUEUE_PREFIX,
+      ADMIN_API_TOKEN,
+      MAX_BODY_SIZE: 512, // Strict small limit for 413 test
+      DOWNSTREAM_TIMEOUT_MS: 5000,
+      ENABLE_AI: false,
+      LOG_LEVEL: 'silent',
+      ALLOW_PRIVATE_DOWNSTREAM: true,
+    };
+
+    const app = createApp({ db, queue, config });
+    apiServer = createServer(app);
+    await new Promise((resolve) => apiServer.listen(0, resolve));
+    const apiPort = apiServer.address().port;
+    const apiBase = `http://127.0.0.1:${apiPort}`;
+    console.log(`[exit-test-phase4] API Server running on port ${apiPort}`);
+
+    workerApp = await startWorkerApp({
+      db,
+      queue,
+      config: {
+        ...config,
+        STALE_JOB_THRESHOLD_MS: 3000,
+        WORKER_LOCK_DURATION_MS: '4000',
+        WORKER_STALLED_INTERVAL_MS: '2000',
+        WORKER_MAX_STALLED_COUNT: '3',
+      },
+    });
+    console.log('[exit-test-phase4] Worker started with Phase 4 configurable knobs');
     // ──────────────────────────────────────────────────────────────────────────
     // Scenario A: D54(a) Body > MAX_BODY_SIZE returns 413 and stores zero docs
     // ──────────────────────────────────────────────────────────────────────────
@@ -280,9 +285,11 @@ async function main() {
     console.log('[exit-test-phase4] ── Scenario D: D54(e) Production Token Startup Guard');
     const origEnv = process.env.NODE_ENV;
     const origToken = process.env.ADMIN_API_TOKEN;
+    const origMongo = process.env.MONGODB_URI;
     try {
       process.env.NODE_ENV = 'production';
       process.env.ADMIN_API_TOKEN = 'short-token-123';
+      process.env.MONGODB_URI = MONGODB_URI;
       let threw = false;
       try {
         getConfig();
@@ -298,6 +305,7 @@ async function main() {
     } finally {
       process.env.NODE_ENV = origEnv;
       process.env.ADMIN_API_TOKEN = origToken;
+      process.env.MONGODB_URI = origMongo;
     }
     console.log('[exit-test-phase4] Scenario D PASS: Short token rejected in production mode');
 
@@ -309,20 +317,22 @@ async function main() {
     receiver.setMode('slow', 600); // 600ms delay
 
     const eventPayloadE = JSON.stringify({
+      event: 'payment.created',
       orderId: 'ord_slow_test_p4',
       amount: 45.5,
       currency: 'INR',
     });
-    const tsE = Math.floor(Date.now() / 1000);
-    const sigE = signGenericHmac(eventPayloadE, secretValue, tsE);
+    const tsE = Date.now();
+    const sigE = signGenericHmac(secretValue, tsE, eventPayloadE);
 
     const startE = Date.now();
     const resE = await fetch(`${apiBase}/ingest/${SLUG}`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-signature': sigE,
-        'x-timestamp': String(tsE),
+        'x-gateway-signature': sigE,
+        'x-gateway-timestamp': String(tsE),
+        'x-gateway-delivery-id': 'del_slow_test_p4',
       },
       body: eventPayloadE,
     });
@@ -454,11 +464,11 @@ async function main() {
   } finally {
     // Teardown
     console.log('[exit-test-phase4] Cleaning up servers and connections...');
-    if (workerApp && workerApp.stop) await workerApp.stop();
-    await new Promise((r) => apiServer.close(r));
-    await receiver.close();
-    await queue.close();
-    await closeDb(mongoClient);
+    if (workerApp && workerApp.stop) await workerApp.stop().catch(() => {});
+    if (apiServer && apiServer.listening) await new Promise((r) => apiServer.close(r)).catch(() => {});
+    if (receiver && receiver.close) await receiver.close().catch(() => {});
+    if (queue && queue.close) await queue.close().catch(() => {});
+    if (mongoClient) await closeDb(mongoClient).catch(() => {});
   }
 }
 

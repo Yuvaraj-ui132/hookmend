@@ -105,10 +105,11 @@ jobs:
         run: |
           echo "Polling Redis..."
           timeout=60
-          while ! redis-cli ping >/dev/null 2>&1; do
+          while ! node -e "const Redis = require('ioredis'); const r = new Redis('redis://localhost:6379', { maxRetriesPerRequest: 1, connectTimeout: 2000, retryStrategy: () => null, lazyConnect: true }); r.on('error', () => {}); r.connect().then(() => r.ping()).then(() => { r.disconnect(); process.exit(0); }).catch(() => process.exit(1));" >/dev/null 2>&1; do
             timeout=$((timeout - 1))
             if [ $timeout -le 0 ]; then
               echo "Redis did not become healthy in time"
+              docker logs $(docker ps -q --filter ancestor=redis:7) || true
               exit 1
             fi
             sleep 1

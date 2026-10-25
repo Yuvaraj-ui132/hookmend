@@ -60,7 +60,7 @@ jobs:
         ports:
           - 27017:27017
         options: >-
-          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
@@ -90,7 +90,7 @@ jobs:
         run: |
           echo "Polling MongoDB..."
           timeout=60
-          while ! mongosh --quiet --eval 'db.runCommand({ping:1})' >/dev/null 2>&1; do
+          while ! node -e "const { MongoClient } = require('mongodb'); const c = new MongoClient('mongodb://localhost:27017/admin?directConnection=true', { serverSelectionTimeoutMS: 2000 }); c.connect().then(() => c.db('admin').command({ ping: 1 })).then(() => { c.close(); process.exit(0); }).catch(() => process.exit(1));" >/dev/null 2>&1; do
             timeout=$((timeout - 1))
             if [ $timeout -le 0 ]; then
               echo "MongoDB did not become healthy in time"

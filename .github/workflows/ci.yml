@@ -44,8 +44,8 @@ jobs:
         #   - 2 critical, 1 high, 5 moderate in DEV dependencies: tinypool (vitest internals), esbuild/vite (vitest), vitest/mocker
         #   - 2 moderate in PROD: react-router 6.x (GHSA-wrjc-x8rr-h8h6, GHSA-337j-9hxr-rhxg)
         # --omit=dev leaves only the 2 moderate react-router advisories.
-        # react-router fix requires a breaking v6→v7 upgrade; tracked separately.
-        # These react-router CVEs affect SSR hydration and <Link> redirect — no server-side attack surface
+        # react-router fix requires a breaking v6->v7 upgrade; tracked separately.
+        # These react-router CVEs affect SSR hydration and <Link> redirect -- no server-side attack surface
         # in the static SPA dashboard. Using --audit-level=high (not critical) is intentional:
         # it would fail on any newly introduced high/critical prod dependency.
         run: npm audit --omit=dev --audit-level=high

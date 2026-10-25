@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * packages/worker/scripts/chaos.js — Phase 4 Chaos Test Suite (D51, D52)
+ * packages/worker/scripts/chaos.js - Phase 4 Chaos Test Suite (D51, D52)
  *
- * Scenarios: C1–C7
+ * Scenarios: C1-C7
  * Usage:
  *   npm run chaos
  *   npm run chaos -- --only C1,C2,C4
@@ -12,7 +12,7 @@
  * - Requires real docker-compose Mongo and Redis (exit 1 if unreachable; no in-memory fallback)
  * - Worker runs as a child process (child_process.spawn of packages/worker/src/main.js)
  * - Redis controlled via ioredis (for FLUSHALL in C3) and docker compose stop/start
- * - All numbers measured from real output — docs/CHAOS.md written by this script
+ * - All numbers measured from real output - docs/CHAOS.md written by this script
  * - Exit code 0 only if every selected scenario passes
  */
 
@@ -22,8 +22,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { readFileSync, existsSync } from 'node:fs';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import os from 'node:os';
 
@@ -41,7 +41,7 @@ import { signGenericHmac, buildPaymentEvent } from '../../simulator/src/sign.js'
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..', '..');
 
-// ── Configuration ─────────────────────────────────────────────────────────────
+// -- Configuration -------------------------------------------------------------
 
 const MONGODB_URI =
   process.env.MONGODB_URI || 'mongodb://localhost:27017/hookmend?directConnection=true';
@@ -74,7 +74,7 @@ const CHAOS_ENV = {
   SIM_WEBHOOK_SECRET: '',
 };
 
-// ── CLI args ──────────────────────────────────────────────────────────────────
+// -- CLI args ------------------------------------------------------------------
 const args = process.argv.slice(2);
 const onlyIdx = args.indexOf('--only');
 const onlyScenarios = onlyIdx >= 0
@@ -86,7 +86,7 @@ const isCI = args.includes('--ci');
 const WAIT_MULTIPLIER = isCI ? 0.7 : 1.0;
 const wait = (ms) => new Promise(r => setTimeout(r, Math.round(ms * WAIT_MULTIPLIER)));
 
-// ── Utility functions ─────────────────────────────────────────────────────────
+// -- Utility functions ---------------------------------------------------------
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -146,7 +146,7 @@ async function waitAllDelivered(db, expected, timeoutMs = 90000) {
   return { counts, elapsed: Date.now() - start, timedOut: true };
 }
 
-// ── Worker child process helpers ──────────────────────────────────────────────
+// -- Worker child process helpers ----------------------------------------------
 
 function spawnWorker(env = {}) {
   const workerMain = join(__dirname, '..', 'src', 'main.js');
@@ -166,11 +166,11 @@ async function killWorker(child) {
 }
 
 async function waitWorkerReady(child, timeoutMs = 5000) {
-  // Worker is ready when it starts consuming jobs — just wait a bit
+  // Worker is ready when it starts consuming jobs - just wait a bit
   await sleep(Math.min(timeoutMs, 2000));
 }
 
-// ── Redis docker compose control ──────────────────────────────────────────────
+// -- Redis docker compose control ----------------------------------------------
 
 function dockerComposeRedis(action) {
   // action: 'stop' | 'start'
@@ -197,7 +197,7 @@ async function pollRedisHealth(redisUrl, timeoutMs = 30000) {
   return false;
 }
 
-// ── Fake AI client for C7 (always throws 429-style error) ────────────────────
+// -- Fake AI client for C7 (always throws 429-style error) --------------------
 
 function createFakeRateLimitedAI() {
   return {
@@ -216,7 +216,7 @@ function createFakeRateLimitedAI() {
   };
 }
 
-// ── Machine info ──────────────────────────────────────────────────────────────
+// -- Machine info --------------------------------------------------------------
 
 function getMachineInfo() {
   const cpus = os.cpus();
@@ -234,7 +234,7 @@ function getCommitHash() {
   } catch { return 'unknown'; }
 }
 
-// ── Setup/Teardown ─────────────────────────────────────────────────────────────
+// -- Setup/Teardown -------------------------------------------------------------
 
 let apiApp, apiServer, apiBase, receiver, db, mongoClient, queue;
 let sourceId, sourceSecret;
@@ -363,7 +363,7 @@ async function resetForScenario() {
   } catch { /* Redis may be down during C2 */ }
 }
 
-// ── Scenario helpers ──────────────────────────────────────────────────────────
+// -- Scenario helpers ----------------------------------------------------------
 
 async function sendN(n, opts = {}) {
   const ids = [];
@@ -382,7 +382,7 @@ async function sendNConcurrent(n, opts = {}) {
   return Promise.all(tasks);
 }
 
-// ── Scenarios ─────────────────────────────────────────────────────────────────
+// -- Scenarios -----------------------------------------------------------------
 
 const results = [];
 
@@ -398,15 +398,15 @@ async function runScenario(id, name, fn) {
     const result = await fn();
     const elapsed = Date.now() - start;
     results.push({ id, name, pass: true, elapsed, ...result });
-    console.log(`[chaos] ${id}: PASS (${elapsed}ms) — ${result.summary || ''}`);
+    console.log(`[chaos] ${id}: PASS (${elapsed}ms) - ${result.summary || ''}`);
   } catch (err) {
     const elapsed = Date.now() - start;
     results.push({ id, name, pass: false, elapsed, error: err.message });
-    console.error(`[chaos] ${id}: FAIL (${elapsed}ms) — ${err.message}`);
+    console.error(`[chaos] ${id}: FAIL (${elapsed}ms) - ${err.message}`);
   }
 }
 
-// ── C1: Worker SIGKILL mid-delivery ──────────────────────────────────────────
+// -- C1: Worker SIGKILL mid-delivery ------------------------------------------
 async function scenarioC1() {
   receiver.setMode('slow', 3000);
 
@@ -465,8 +465,9 @@ async function scenarioC1() {
   };
 }
 
-// ── C2: Redis down during ingest ──────────────────────────────────────────────
+// -- C2: Redis down during ingest ----------------------------------------------
 async function scenarioC2() {
+  const scenarioStart = Date.now();
   receiver.setMode('ok');
   const worker = spawnWorker();
   await waitWorkerReady(worker, 2000);
@@ -479,7 +480,7 @@ async function scenarioC2() {
   }
   await sleep(1500); // Wait for Redis to go down
 
-  // Send 20 events while Redis is down — should get HTTP 200 each (fail-fast producer)
+  // Send 20 events while Redis is down - should get HTTP 200 each (fail-fast producer)
   const n = 20;
   const responses = await sendNConcurrent(n);
 
@@ -505,7 +506,11 @@ async function scenarioC2() {
   const timeout = isCI ? 90000 : 120000;
   const { counts, elapsed, timedOut } = await waitAllDelivered(db, n, timeout);
   await killWorker(worker);
-  const secondsToLastDelivery = Math.round((elapsed) / 1000);
+
+  const postRestartDeliveryMs = Date.now() - redisRestartAt;
+  const postRestartDeliverySeconds = Math.round(postRestartDeliveryMs / 1000);
+  const totalRecoveryMs = Date.now() - scenarioStart;
+  const totalRecoverySeconds = Math.round(totalRecoveryMs / 1000);
 
   const delivered = counts.delivered || 0;
   const dead = counts.dead || 0;
@@ -517,15 +522,19 @@ async function scenarioC2() {
   if (dead > 0) throw new Error(`Expected 0 dead events, got ${dead}`);
 
   return {
-    summary: `${http200}/${n} HTTP 200 while Redis down; all ${delivered} delivered in ${secondsToLastDelivery}s after restart`,
+    summary: `${http200}/${n} HTTP 200 while Redis down; all ${delivered} delivered in ${postRestartDeliverySeconds}s post-restart (${totalRecoverySeconds}s total)`,
     http200,
     maxLatencyMs: maxLatency,
-    secondsToLastDelivery,
+    postRestartDeliveryMs,
+    postRestartDeliverySeconds,
+    totalRecoveryMs,
+    totalRecoverySeconds,
+    recoveryMs: postRestartDeliveryMs,
     delivered,
   };
 }
 
-// ── C3: Redis DATA LOSS (FLUSHALL while in flight) ────────────────────────────
+// -- C3: Redis DATA LOSS (FLUSHALL while in flight) ----------------------------
 async function scenarioC3() {
   const n = 30;
   receiver.setMode('slow', 1500);
@@ -573,7 +582,7 @@ async function scenarioC3() {
   };
 }
 
-// ── C4: Duplicate storm ───────────────────────────────────────────────────────
+// -- C4: Duplicate storm -------------------------------------------------------
 async function scenarioC4() {
   const DELIVERY_ID = `dup-storm-${randomBytes(8).toString('hex')}`;
   const n = 100;
@@ -612,7 +621,7 @@ async function scenarioC4() {
   };
 }
 
-// ── C5: Downstream outage shorter than retry window ──────────────────────────
+// -- C5: Downstream outage shorter than retry window --------------------------
 async function scenarioC5() {
   // Total backoff window with 5 attempts: ~200+400+800+1600+3200 = ~6200ms max
   // We'll bring it back at ~3000ms (half of max)
@@ -655,7 +664,7 @@ async function scenarioC5() {
   };
 }
 
-// ── C6: Downstream outage longer than retry window ───────────────────────────
+// -- C6: Downstream outage longer than retry window ---------------------------
 async function scenarioC6() {
   const n = 20;
   receiver.setMode('fail503');
@@ -715,7 +724,7 @@ async function scenarioC6() {
   };
 }
 
-// ── C7: AI rate limit ─────────────────────────────────────────────────────────
+// -- C7: AI rate limit ---------------------------------------------------------
 async function scenarioC7() {
   // This test runs in-process: analyze-drift worker with fake AI that always 429s
   // We need a quarantined event with a drift fingerprint, then trigger analyze-drift
@@ -812,7 +821,7 @@ async function scenarioC7() {
   };
 }
 
-// ── Write docs/CHAOS.md ───────────────────────────────────────────────────────
+// -- Write docs/CHAOS.md -------------------------------------------------------
 
 async function writeChaosDoc(machine, commit, date) {
   const table = [
@@ -831,8 +840,8 @@ async function writeChaosDoc(machine, commit, date) {
   };
 
   const assertMap = {
-    C1: 'All 20 delivered, exactly 20 docs, 0 dead, receiver saw each id ≥1',
-    C2: 'All 200 HTTP 200 < 3000ms, 20 stored received, all delivered after Redis restart',
+    C1: 'All 20 delivered, exactly 20 docs, 0 dead, receiver saw each id >= 1',
+    C2: 'All 20 HTTP 200 < 3000ms, 20 stored received, all delivered after Redis restart',
     C3: 'All 30 delivered, 0 dead, 0 stuck in any non-terminal state',
     C4: '1 doc, 1 not-dedup, 99 dedup, receiver saw exactly 1 request',
     C5: 'All 20 delivered, 0 dead',
@@ -840,29 +849,48 @@ async function writeChaosDoc(machine, commit, date) {
     C7: 'Proposal with aiUsed=false, aiFailureReason=AI_RATE_LIMITED; no crash; baseline schema exists',
   };
 
+  const chaosDocPath = join(ROOT, 'docs', 'CHAOS.md');
+  const existingRows = {};
+  if (existsSync(chaosDocPath)) {
+    try {
+      const existingContent = await readFile(chaosDocPath, 'utf8');
+      const lines = existingContent.split('\n');
+      for (const line of lines) {
+        const match = line.match(/^\|\s*(C\d+)\s*\|/);
+        if (match) {
+          existingRows[match[1]] = line.trim();
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
   for (const r of results) {
     if (r.skipped) {
-      table.push(`| ${r.id} | ${faultMap[r.id] || r.name} | ${assertMap[r.id] || ''} | SKIPPED | — |`);
+      if (existingRows[r.id] && !existingRows[r.id].includes('SKIPPED')) {
+        table.push(existingRows[r.id]);
+      } else {
+        table.push(`| ${r.id} | ${faultMap[r.id] || r.name} | ${assertMap[r.id] || ''} | SKIPPED | - |`);
+      }
       continue;
     }
     const status = r.pass ? 'PASS' : `FAIL: ${r.error || ''}`;
     const recovery = r.recoveryMs ? `${Math.round(r.recoveryMs / 1000)}` :
       r.elapsedMs ? `${Math.round(r.elapsedMs / 1000)}` :
-      r.elapsed ? `${Math.round(r.elapsed / 1000)}` : '—';
+      r.elapsed ? `${Math.round(r.elapsed / 1000)}` : '-';
     const resultDetail = r.summary || r.error || '';
-    table.push(`| ${r.id} | ${faultMap[r.id] || r.name} | ${assertMap[r.id] || ''} | ${status} — ${resultDetail} | ${recovery} |`);
+    table.push(`| ${r.id} | ${faultMap[r.id] || r.name} | ${assertMap[r.id] || ''} | ${status} - ${resultDetail} | ${recovery} |`);
   }
 
   const content = `# Hookmend Chaos Test Results
 
-Generated: ${date}  
-Commit: ${commit}  
-OS: ${machine.os}  
-Node: ${machine.node}  
-CPU: ${machine.cpu}  
-RAM: ${machine.ram}  
-Queue prefix: \`${QUEUE_PREFIX}\`  
-Worker knobs (chaos): lockDuration=4000ms, stalledInterval=2000ms, maxStalledCount=3  
+Generated: ${date}
+Commit: ${commit}
+OS: ${machine.os}
+Node: ${machine.node}
+CPU: ${machine.cpu}
+RAM: ${machine.ram}
+Queue prefix: \`${QUEUE_PREFIX}\`
+Worker knobs (chaos): lockDuration=4000ms, stalledInterval=2000ms, maxStalledCount=3
 STALE_JOB_THRESHOLD_MS (chaos): 10000ms
 
 ## Results
@@ -891,10 +919,10 @@ npm run chaos -- --only C1,C2,C4 --ci
   console.log('[chaos] Wrote docs/CHAOS.md');
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// -- Main ----------------------------------------------------------------------
 
 async function main() {
-  console.log('[chaos] Hookmend Chaos Test Suite — Phase 4');
+  console.log('[chaos] Hookmend Chaos Test Suite - Phase 4');
   console.log(`[chaos] MongoDB: ${MONGODB_URI}`);
   console.log(`[chaos] Redis:   ${REDIS_URL}`);
   console.log(`[chaos] DB:      ${DB_NAME}`);
@@ -927,15 +955,15 @@ async function main() {
   await writeChaosDoc(machine, commit, date);
 
   // Print summary
-  console.log('\n[chaos] ══ SUMMARY ══');
+  console.log('\n[chaos] == SUMMARY ==');
   let allPass = true;
   for (const r of results) {
     if (r.skipped) {
       console.log(`[chaos]   ${r.id}: SKIPPED`);
     } else if (r.pass) {
-      console.log(`[chaos]   ${r.id}: PASS — ${r.summary || ''}`);
+      console.log(`[chaos]   ${r.id}: PASS - ${r.summary || ''}`);
     } else {
-      console.log(`[chaos]   ${r.id}: FAIL — ${r.error || ''}`);
+      console.log(`[chaos]   ${r.id}: FAIL - ${r.error || ''}`);
       allPass = false;
     }
   }

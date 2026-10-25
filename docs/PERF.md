@@ -2,11 +2,11 @@
 
 > **Important**: These numbers were measured on a single laptop with the API server, MongoDB, and Redis all running locally. They are **not** production capacity numbers and should not be treated as such. Infrastructure latency, network hops, and multi-tenant load will differ significantly in production.
 
-Generated: 2026-10-25T13:14:25.432Z  
-Commit: f1a215d  
-OS: Windows_NT 10.0.26300  
-Node: v24.16.0  
-CPU: Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz (8 cores)  
+Generated: 2026-10-25T13:14:25.432Z
+Commit: f1a215d
+OS: Windows_NT 10.0.26300
+Node: v24.16.0
+CPU: Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz (8 cores)
 RAM: 16 GB
 
 ## Configuration
@@ -15,7 +15,7 @@ RAM: 16 GB
 - MongoDB: Docker (local)
 - Redis: Docker (local)
 - Worker: child process (separate Node.js process)
-- `INGEST_RATE_LIMIT_MAX=100000` — default per-source limit bypassed for this run; real production should use a much lower value
+- `INGEST_RATE_LIMIT_MAX=100000` - default per-source limit bypassed for this run; real production should use a much lower value
 - Concurrency cap: 20 concurrent in-flight requests
 - Stage duration: 30s per stage
 - Queue depth sampling interval: 1000ms
@@ -50,7 +50,7 @@ RAM: 16 GB
 - Delivered: 7045
 - Dead: 0
 
-> **Accounting**: Attempted = total HTTP requests dispatched; Accepted = HTTP 200 responses (events stored in DB); Delivered = events confirmed delivered downstream by worker. In this test the ingest server performs deduplication, so accepted ≤ attempted when duplicate delivery-ids are reused. No duplicates are intentionally sent in staged RPS tests; accepted should equal attempted barring errors.
+> **Accounting**: Attempted = total HTTP requests dispatched; Accepted = HTTP 200 responses (events stored in DB); Delivered = events confirmed delivered downstream by worker. In this test the ingest server performs deduplication, so accepted <= attempted when duplicate delivery-ids are reused. No duplicates are intentionally sent in staged RPS tests; accepted should equal attempted barring errors.
 
 ## Assertions (Spec Baseline: 500 events/min for 3 minutes)
 

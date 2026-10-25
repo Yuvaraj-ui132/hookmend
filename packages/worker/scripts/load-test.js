@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * packages/worker/scripts/load-test.js — Phase 4 Load Test (D53)
+ * packages/worker/scripts/load-test.js - Phase 4 Load Test (D53)
  *
  * Usage:
  *   npm run load-test
@@ -10,7 +10,7 @@
  * HARD RULES:
  * - Requires real docker-compose Mongo and Redis (exit 1 if unreachable)
  * - Worker runs as child process; API and receiver in-process
- * - All numbers measured from real output — docs/PERF.md written by this script
+ * - All numbers measured from real output - docs/PERF.md written by this script
  * - INGEST_RATE_LIMIT_MAX set very high for this run (otherwise per-source limit throttles test)
  * - Do NOT assert latency thresholds (machines differ); report only
  * - Assert: zero HTTP errors and zero lost events (received == delivered, none dead)
@@ -38,7 +38,7 @@ import { signGenericHmac, buildPaymentEvent } from '../../simulator/src/sign.js'
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..', '..');
 
-// ── Configuration ─────────────────────────────────────────────────────────────
+// -- Configuration -------------------------------------------------------------
 
 const MONGODB_URI =
   process.env.MONGODB_URI || 'mongodb://localhost:27017/hookmend?directConnection=true';
@@ -86,7 +86,7 @@ function percentile(arr, p) {
   return sorted[Math.max(0, idx)];
 }
 
-// ── Setup ─────────────────────────────────────────────────────────────────────
+// -- Setup ---------------------------------------------------------------------
 
 let apiApp, apiServer, apiBase, receiver, db, mongoClient, queue;
 let sourceSecret, workerChild;
@@ -154,14 +154,14 @@ async function setup() {
   });
 
   // Build API in-process
-  // INGEST_RATE_LIMIT_MAX set very high (10000/min) — default would throttle test
+  // INGEST_RATE_LIMIT_MAX set very high (10000/min) - default would throttle test
   queue = createBullQueue({ redisUrl: REDIS_URL, prefix: QUEUE_PREFIX });
   const config = {
     PORT: 0,
     NODE_ENV: 'test',
     MAX_BODY_SIZE: 524288,
     TIMESTAMP_TOLERANCE_SECONDS: 300,
-    INGEST_RATE_LIMIT_MAX: 100000, // Very high — load test needs this
+    INGEST_RATE_LIMIT_MAX: 100000, // Very high - load test needs this
     INGEST_RATE_LIMIT_WINDOW_MS: 60000,
     EVENT_TTL_DAYS: 14,
     LOG_LEVEL: 'error',
@@ -227,7 +227,7 @@ async function teardown() {
   await closeDb().catch(() => {});
 }
 
-// ── Load runner ───────────────────────────────────────────────────────────────
+// -- Load runner ---------------------------------------------------------------
 
 async function runStage(targetRps, durationSec) {
   const latencies = [];
@@ -331,10 +331,10 @@ async function sampleQueueDepth(queueObj, intervalMs, durationMs) {
   return depths;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// -- Main ----------------------------------------------------------------------
 
 async function main() {
-  console.log('[load-test] Hookmend Load Test — Phase 4');
+  console.log('[load-test] Hookmend Load Test - Phase 4');
 
   try {
     await setup();
@@ -364,7 +364,7 @@ async function main() {
     // Run spec baseline: 500 events per minute for 3 minutes
     // = 500 / 60 = ~8.33 rps for 180 seconds = 1500 events target
     const baselineTargetRps = 500 / 60;
-    console.log('\n[load-test] Running spec baseline: ~8.33 target RPS for 180s (500 events/min × 3 min = 1500 target events)');
+    console.log('\n[load-test] Running spec baseline: ~8.33 target RPS for 180s (500 events/min * 3 min = 1500 target events)');
     const baselineResult = await runStage(baselineTargetRps, 180);
     totalAttempted += baselineResult.attempted;
     totalAccepted += baselineResult.accepted;
@@ -436,7 +436,7 @@ async function main() {
       assertions.push('PASS: zero dead events');
     }
 
-    // All accepted events must be delivered — no silent 5% tolerance after drain timeout
+    // All accepted events must be delivered - no silent 5% tolerance after drain timeout
     if (delivered < totalAccepted) {
       assertions.push(`FAIL: only ${delivered}/${totalAccepted} accepted events delivered after drain timeout`);
       assertPass = false;
@@ -463,11 +463,11 @@ async function main() {
 
 > **Important**: These numbers were measured on a single laptop with the API server, MongoDB, and Redis all running locally. They are **not** production capacity numbers and should not be treated as such. Infrastructure latency, network hops, and multi-tenant load will differ significantly in production.
 
-Generated: ${date}  
-Commit: ${commit}  
-OS: ${machine.os}  
-Node: ${machine.node}  
-CPU: ${machine.cpu}  
+Generated: ${date}
+Commit: ${commit}
+OS: ${machine.os}
+Node: ${machine.node}
+CPU: ${machine.cpu}
 RAM: ${machine.ram}
 
 ## Configuration
@@ -476,7 +476,7 @@ RAM: ${machine.ram}
 - MongoDB: Docker (local)
 - Redis: Docker (local)
 - Worker: child process (separate Node.js process)
-- \`INGEST_RATE_LIMIT_MAX=100000\` — default per-source limit bypassed for this run; real production should use a much lower value
+- \`INGEST_RATE_LIMIT_MAX=100000\` - default per-source limit bypassed for this run; real production should use a much lower value
 - Concurrency cap: ${concurrency} concurrent in-flight requests
 - Stage duration: ${stageDuration}s per stage
 - Queue depth sampling interval: ${queueSamplingIntervalMs}ms
@@ -505,7 +505,7 @@ ${stageTable.join('\n')}
 - Delivered: ${delivered}
 - Dead: ${dead}
 
-> **Accounting**: Attempted = total HTTP requests dispatched; Accepted = HTTP 200 responses (events stored in DB); Delivered = events confirmed delivered downstream by worker. In this test the ingest server performs deduplication, so accepted ≤ attempted when duplicate delivery-ids are reused. No duplicates are intentionally sent in staged RPS tests; accepted should equal attempted barring errors.
+> **Accounting**: Attempted = total HTTP requests dispatched; Accepted = HTTP 200 responses (events stored in DB); Delivered = events confirmed delivered downstream by worker. In this test the ingest server performs deduplication, so accepted <= attempted when duplicate delivery-ids are reused. No duplicates are intentionally sent in staged RPS tests; accepted should equal attempted barring errors.
 
 ## Assertions (Spec Baseline: 500 events/min for 3 minutes)
 
@@ -533,7 +533,7 @@ npm run load-test -- --stages "10,25,50,100" --duration 30
       console.log('[load-test] ALL ASSERTIONS PASS');
     }
   } finally {
-    // Teardown always runs — process.exitCode (not process.exit) is used so this finally block executes
+    // Teardown always runs - process.exitCode (not process.exit) is used so this finally block executes
     await teardown();
   }
 }

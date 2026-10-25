@@ -343,3 +343,10 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
   - Scenario H: D55 & D56 CI workflow structure passes least privilege checks, `npm audit --omit=dev --audit-level=critical` passes, and dashboard build artifact (`dist/index.html`) is verified.
 - Added `npm run exit-test:phase4` script to root `package.json`.
 - Enforces strict real Docker Mongo + Redis check on startup; fails clearly with exit code 1 if unreachable (no in-memory fallback per D51).
+
+## Phase 4 Fix — STEP 1 Evidence & Root Cause (C2/C3) [DONE]
+1. Environment variables RECONCILE_INTERVAL_MS, RECONCILE_MIN_AGE_MS, and STALE_JOB_THRESHOLD_MS passed by chaos.js were ignored in worker main.js config, falling back to 300,000ms defaults.
+2. In chaos C2 and C3 (120s test duration), the periodic reconciliation timer never fired a second time (300s > 120s), leaving events stuck in 'received'.
+3. In chaos C2, spawnWorker() was completely omitted from scenarioC2, leaving zero worker processes running to consume or reconcile events.
+4. During Redis outages, queue.enqueue() failed due to enableOfflineQueue:false, but error handling was robust; the true blockage was the reconciler's dormant timer.
+5. In C3 FLUSHALL, in-flight Redis jobs were deleted, but events in 'received' and 'processing' were not reconciled before the 120s timeout due to the 300s interval/thresholds.

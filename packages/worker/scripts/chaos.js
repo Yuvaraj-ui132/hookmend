@@ -466,72 +466,127 @@ async function scenarioC1() {
 }
 
 // -- C2: Redis down during ingest ----------------------------------------------
+async function printC2Diagnostics(err, { sentIds, firstSendAt, redisConfirmedDownAt, worker }) {
+  console.error('\n[chaos] [C2 DIAGNOSTICS] ═══════════════════════════════════════════════');
+  console.error(`[chaos] [C2 DIAGNOSTICS] Failure Reason: ${err?.message || err}`);
+  let docs = [];
+  try {
+    docs = sentIds.length > 0
+      ? await db.collection('events').find({ deliveryId: { $in: sentIds } }).toArray()
+      : [];
+  } catch (dbErr) {
+    console.error(`[chaos] [C2 DIAGNOSTICS] DB query failed: ${dbErr.message}`);
+  }
+  console.error(`[chaos] [C2 DIAGNOSTICS] Total documents for 20 ids: ${docs.length}`);
+  const countsByStatus = {};
+  for (const d of docs) {
+    countsByStatus[d.status] = (countsByStatus[d.status] || 0) + 1;
+  }
+  console.error(`[chaos] [C2 DIAGNOSTICS] Counts by status: ${JSON.stringify(countsByStatus)}`);
+  const perEventStatus = docs.slice(0, 20).map(d => ({ deliveryId: d.deliveryId, status: d.status }));
+  console.error(`[chaos] [C2 DIAGNOSTICS] Per-event status for first 20 ids: ${JSON.stringify(perEventStatus)}`);
+
+  let redisPingResult = 'UNKNOWN';
+  try {
+    const rDiag = new Redis(REDIS_URL, { connectTimeout: 1000, maxRetriesPerRequest: 0, lazyConnect: true, retryStrategy: () => null });
+    await rDiag.connect();
+    const pong = await rDiag.ping();
+    redisPingResult = pong;
+    await rDiag.quit().catch(() => {});
+    rDiag.disconnect();
+  } catch (pingErr) {
+    redisPingResult = `FAILED (${pingErr.message})`;
+  }
+  console.error(`[chaos] [C2 DIAGNOSTICS] Redis ping at failure moment: ${redisPingResult}`);
+  const workerAlive = Boolean(worker && !worker.killed && worker.exitCode === null);
+  console.error(`[chaos] [C2 DIAGNOSTICS] Worker child alive: ${workerAlive}`);
+  const deltaMs = (firstSendAt != null && redisConfirmedDownAt != null) ? (firstSendAt - redisConfirmedDownAt) : 'N/A';
+  console.error(`[chaos] [C2 DIAGNOSTICS] Timestamps: firstSendAt=${firstSendAt} (${firstSendAt ? new Date(firstSendAt).toISOString() : 'N/A'}), redisConfirmedDownAt=${redisConfirmedDownAt} (${redisConfirmedDownAt ? new Date(redisConfirmedDownAt).toISOString() : 'N/A'}), deltaMs=${deltaMs}`);
+  console.error('[chaos] [C2 DIAGNOSTICS] ═══════════════════════════════════════════════\n');
+}
+
 async function scenarioC2() {
   const scenarioStart = Date.now();
-  receiver.setMode('ok');
-  const worker = spawnWorker();
-  await waitWorkerReady(worker, 2000);
+  let sentIds = [];
+  let firstSendAt = null;
+  let redisConfirmedDownAt = null;
+  let worker = null;
 
-  // Stop Redis via docker compose
-  console.log('[chaos] C2: stopping Redis via docker compose');
-  const stopResult = dockerComposeRedis('stop');
-  if (stopResult.code !== 0) {
-    console.warn('[chaos] C2: docker compose stop failed; attempting direct ioredis ping to verify');
+  try {
+    receiver.setMode('ok');
+    worker = spawnWorker();
+    await waitWorkerReady(worker, 2000);
+
+    // Stop Redis via docker compose
+    console.log('[chaos] C2: stopping Redis via docker compose');
+    const stopResult = dockerComposeRedis('stop');
+    if (stopResult.code !== 0) {
+      console.warn('[chaos] C2: docker compose stop failed; attempting direct ioredis ping to verify');
+    }
+    await sleep(1500); // Wait for Redis to go down
+
+    // Send 20 events while Redis is down - should get HTTP 200 each (fail-fast producer)
+    const n = 20;
+    firstSendAt = Date.now();
+    const responses = await sendNConcurrent(n);
+    sentIds = responses.map(r => r.deliveryId);
+
+    const http200 = responses.filter(r => r.status === 200).length;
+    const maxLatency = Math.max(...responses.map(r => r.latency));
+
+    console.log(`[chaos] C2: ${http200}/${n} returned 200 while Redis down, maxLatency=${maxLatency}ms`);
+
+    // Check all stored as 'received'
+    const storedCount = await db.collection('events').countDocuments({ status: 'received' });
+
+    // Start Redis again
+    console.log('[chaos] C2: starting Redis via docker compose');
+    dockerComposeRedis('start');
+
+    const redisHealthy = await pollRedisHealth(REDIS_URL, 30000);
+    if (!redisHealthy) throw new Error('Redis did not become healthy within 30s of restart');
+    console.log('[chaos] C2: Redis back online');
+
+    const redisRestartAt = Date.now();
+
+    // Wait for all events to be delivered via reconciliation
+    const timeout = isCI ? 90000 : 120000;
+    const { counts, elapsed, timedOut } = await waitAllDelivered(db, n, timeout);
+    await killWorker(worker);
+    worker = null;
+
+    const postRestartDeliveryMs = Date.now() - redisRestartAt;
+    const postRestartDeliverySeconds = Math.round(postRestartDeliveryMs / 1000);
+    const totalRecoveryMs = Date.now() - scenarioStart;
+    const totalRecoverySeconds = Math.round(totalRecoveryMs / 1000);
+
+    const delivered = counts.delivered || 0;
+    const dead = counts.dead || 0;
+
+    if (http200 !== n) throw new Error(`Expected ${n} HTTP 200s while Redis down, got ${http200}`);
+    if (maxLatency >= 3000) throw new Error(`Max latency ${maxLatency}ms exceeded 3000ms`);
+    if (storedCount < n) throw new Error(`Expected ${n} events stored as 'received', got ${storedCount}`);
+    if (delivered < n) throw new Error(`Only ${delivered}/${n} delivered after ${elapsed}ms${timedOut ? ' (timed out)' : ''}`);
+    if (dead > 0) throw new Error(`Expected 0 dead events, got ${dead}`);
+
+    return {
+      summary: `${http200}/${n} HTTP 200 while Redis down; all ${delivered} delivered in ${postRestartDeliverySeconds}s post-restart (${totalRecoverySeconds}s total)`,
+      http200,
+      maxLatencyMs: maxLatency,
+      postRestartDeliveryMs,
+      postRestartDeliverySeconds,
+      totalRecoveryMs,
+      totalRecoverySeconds,
+      recoveryMs: postRestartDeliveryMs,
+      delivered,
+    };
+  } catch (err) {
+    await printC2Diagnostics(err, { sentIds, firstSendAt, redisConfirmedDownAt, worker });
+    if (worker) {
+      await killWorker(worker).catch(() => {});
+    }
+    throw err;
   }
-  await sleep(1500); // Wait for Redis to go down
-
-  // Send 20 events while Redis is down - should get HTTP 200 each (fail-fast producer)
-  const n = 20;
-  const responses = await sendNConcurrent(n);
-
-  const http200 = responses.filter(r => r.status === 200).length;
-  const maxLatency = Math.max(...responses.map(r => r.latency));
-
-  console.log(`[chaos] C2: ${http200}/${n} returned 200 while Redis down, maxLatency=${maxLatency}ms`);
-
-  // Check all stored as 'received'
-  const storedCount = await db.collection('events').countDocuments({ status: 'received' });
-
-  // Start Redis again
-  console.log('[chaos] C2: starting Redis via docker compose');
-  dockerComposeRedis('start');
-
-  const redisHealthy = await pollRedisHealth(REDIS_URL, 30000);
-  if (!redisHealthy) throw new Error('Redis did not become healthy within 30s of restart');
-  console.log('[chaos] C2: Redis back online');
-
-  const redisRestartAt = Date.now();
-
-  // Wait for all events to be delivered via reconciliation
-  const timeout = isCI ? 90000 : 120000;
-  const { counts, elapsed, timedOut } = await waitAllDelivered(db, n, timeout);
-  await killWorker(worker);
-
-  const postRestartDeliveryMs = Date.now() - redisRestartAt;
-  const postRestartDeliverySeconds = Math.round(postRestartDeliveryMs / 1000);
-  const totalRecoveryMs = Date.now() - scenarioStart;
-  const totalRecoverySeconds = Math.round(totalRecoveryMs / 1000);
-
-  const delivered = counts.delivered || 0;
-  const dead = counts.dead || 0;
-
-  if (http200 !== n) throw new Error(`Expected ${n} HTTP 200s while Redis down, got ${http200}`);
-  if (maxLatency >= 3000) throw new Error(`Max latency ${maxLatency}ms exceeded 3000ms`);
-  if (storedCount < n) throw new Error(`Expected ${n} events stored as 'received', got ${storedCount}`);
-  if (delivered < n) throw new Error(`Only ${delivered}/${n} delivered after ${elapsed}ms${timedOut ? ' (timed out)' : ''}`);
-  if (dead > 0) throw new Error(`Expected 0 dead events, got ${dead}`);
-
-  return {
-    summary: `${http200}/${n} HTTP 200 while Redis down; all ${delivered} delivered in ${postRestartDeliverySeconds}s post-restart (${totalRecoverySeconds}s total)`,
-    http200,
-    maxLatencyMs: maxLatency,
-    postRestartDeliveryMs,
-    postRestartDeliverySeconds,
-    totalRecoveryMs,
-    totalRecoverySeconds,
-    recoveryMs: postRestartDeliveryMs,
-    delivered,
-  };
 }
 
 // -- C3: Redis DATA LOSS (FLUSHALL while in flight) ----------------------------

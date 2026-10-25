@@ -375,3 +375,17 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
 - `npm run load-test`: ALL ASSERTIONS PASS (achieved 10, 25, 50, 100 RPS across stages, 500 events/min achieved for 180s baseline, zero HTTP errors, zero dead events; generated `docs/PERF.md`).
 - `npm audit --omit=dev --audit-level=high`: passes with 0 high/critical vulnerabilities.
 
+## Phase 4 CI Fix — STEP 1 Evidence (C2 Investigation) [DONE]
+- Ran `npm run chaos -- --ci --only C1,C2,C4` 5 times in a row locally:
+  - Run 1: C2 PASS (11290ms, 20/20 HTTP 200, 20/20 delivered in 5s post-restart)
+  - Run 2: C2 PASS (11481ms, 20/20 HTTP 200, 20/20 delivered in 7s post-restart)
+  - Run 3: C2 PASS (11561ms, 20/20 HTTP 200, 20/20 delivered in 6s post-restart)
+  - Run 4: C2 PASS (11564ms, 20/20 HTTP 200, 20/20 delivered in 6s post-restart)
+  - Run 5: C2 PASS (11594ms, 20/20 HTTP 200, 20/20 delivered in 6s post-restart)
+- C2 Code Inspection Analysis (packages/worker/scripts/chaos.js):
+  (a) After `docker compose stop redis`, script did not confirm Redis is down at all; it merely waited on `await sleep(1500)`. It must poll `ioredis` ping until 3 consecutive failures (200ms apart, 30s timeout) before sending.
+  (b) Event delivery IDs are generated per event (`randomBytes(16).toString('hex')`), but status queries in C2 were global (`countDocuments({ status: 'received' })`) rather than scoped to the 20 sent IDs (`deliveryId: { $in: ids }`).
+  (c) `killWorker` sent `SIGKILL` with `await sleep(200)` without awaiting the child process `'exit'` event, allowing orphaned workers to briefly persist, and no worker cleanup existed between scenarios.
+  (d) The check runs immediately after `sendNConcurrent(20)`; if Redis was not yet down, BullMQ enqueue succeeded for early events and the worker processed them into processing/delivered before the count. While Redis is genuinely down, reconciliation cannot touch events because BullMQ/Redis connections fail fast (`enableOfflineQueue: false`).
+  (e) `--ci` sets `WAIT_MULTIPLIER = 0.7`, reducing `wait(ms)` durations, C1 delivery timeout from 90s to 60s, and C2 timeout from 120s to 90s, but raw `sleep(1500)` was unscaled.
+

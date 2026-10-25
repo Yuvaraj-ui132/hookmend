@@ -356,3 +356,10 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
 - Verified production build and tests: `npm test` passes (325/325 tests), `npm run build:dashboard` succeeds (`dist/index.html` generated).
 - Ran `npm audit --omit=dev --audit-level=high`: passes with 0 high or critical vulnerabilities.
 - Remaining findings: 2 moderate-severity advisories in `react-router` / `react-router-dom` 6.x (GHSA-wrjc-x8rr-h8h6, GHSA-337j-9hxr-rhxg). Both require a breaking v7 upgrade (`npm audit fix --force`); concern SSR hydration and `<Link>` redirect path traversal, neither of which has an attack surface in the static client-side dashboard SPA. Documented in `docs/SPEC.md` Section 18.
+
+## Phase 4 Fix — STEP 5 Load Test Pacer [DONE]
+- Replaced interval-based pacing with a 5 ms catch-up scheduler in `packages/worker/scripts/load-test.js` (`due = Math.floor(elapsedSeconds * targetRps) - sent`).
+- Configured scheduler to respect the concurrency cap and smoothly absorb Windows timer jitter.
+- Updated baseline execution to target `500 / 60` RPS (~8.33 target RPS) over 180s (1500 target events).
+- Updated reporting in console and `docs/PERF.md` to report BOTH target and achieved RPS per stage, achieved events/min for baseline, and stated the queue depth sampling interval (1000ms).
+

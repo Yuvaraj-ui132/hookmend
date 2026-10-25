@@ -233,10 +233,11 @@ async function runStage(targetRps, durationSec) {
   const latencies = [];
   let sent = 0;
   let accepted = 0;
+  let dispatched = 0;
   const errsByStatus = {};
 
-  const intervalMs = 1000 / targetRps;
-  const endTime = Date.now() + durationSec * 1000;
+  const startTime = Date.now();
+  const endTime = startTime + durationSec * 1000;
 
   // Queue of in-flight promises
   const inflight = new Set();
@@ -274,19 +275,24 @@ async function runStage(targetRps, durationSec) {
     }
   }
 
-  // Pacer: fire at targetRps
+  // Catch-up scheduler: every 5 ms compute due = floor(elapsedSeconds * rps) - sent and send that many
   while (Date.now() < endTime) {
-    if (inflight.size < concurrency) {
+    const elapsedSeconds = (Date.now() - startTime) / 1000;
+    let due = Math.floor(elapsedSeconds * targetRps) - sent;
+    while (due > 0 && inflight.size < concurrency) {
+      sent++;
+      due--;
       const p = sendOne().finally(() => inflight.delete(p));
       inflight.add(p);
     }
-    await sleep(Math.max(1, intervalMs - 1));
+    await sleep(5);
   }
 
   // Drain remaining
   await Promise.all([...inflight]);
 
-  const achievedRps = sent / durationSec;
+  const actualElapsedSec = (Date.now() - startTime) / 1000;
+  const achievedRps = actualElapsedSec > 0 ? sent / actualElapsedSec : 0;
   return {
     targetRps,
     durationSec,
@@ -336,30 +342,32 @@ async function main() {
 
   try {
     for (const rps of runStages) {
-      console.log(`\n[load-test] Stage: ${rps} RPS for ${stageDuration}s`);
+      console.log(`\n[load-test] Stage: Target ${rps} RPS for ${stageDuration}s`);
       const stageResult = await runStage(rps, stageDuration);
       stageResults.push(stageResult);
       totalSent += stageResult.sent;
       totalAccepted += stageResult.accepted;
-      console.log(`[load-test]   sent=${stageResult.sent} accepted=${stageResult.accepted} achieved=${stageResult.achievedRps}rps p50=${stageResult.p50}ms p95=${stageResult.p95}ms p99=${stageResult.p99}ms max=${stageResult.max}ms`);
+      console.log(`[load-test]   target=${stageResult.targetRps}rps sent=${stageResult.sent} accepted=${stageResult.accepted} achieved=${stageResult.achievedRps}rps p50=${stageResult.p50}ms p95=${stageResult.p95}ms p99=${stageResult.p99}ms max=${stageResult.max}ms`);
       await sleep(1000); // brief pause between stages
     }
 
-    // Run spec baseline: 500 events per minute for 3 minutes (shortened from 5)
-    // = ~8.33 rps for 180 seconds = 1500 events
-    console.log('\n[load-test] Running spec baseline: ~8.33 rps for 180s (500 events/min × 3 min)');
-    const baselineResult = await runStage(8, 180); // approx 500/min
+    // Run spec baseline: 500 events per minute for 3 minutes
+    // = 500 / 60 = ~8.33 rps for 180 seconds = 1500 events target
+    const baselineTargetRps = 500 / 60;
+    console.log('\n[load-test] Running spec baseline: ~8.33 target RPS for 180s (500 events/min × 3 min = 1500 target events)');
+    const baselineResult = await runStage(baselineTargetRps, 180);
     totalSent += baselineResult.sent;
     totalAccepted += baselineResult.accepted;
-    console.log(`[load-test]   baseline: sent=${baselineResult.sent} accepted=${baselineResult.accepted} errors=${JSON.stringify(baselineResult.errsByStatus)}`);
+    const baselineAchievedEventsPerMin = Math.round((baselineResult.sent / (baselineResult.durationSec / 60)) * 10) / 10;
+    console.log(`[load-test]   baseline: target=${Math.round(baselineTargetRps * 10) / 10}rps sent=${baselineResult.sent} accepted=${baselineResult.accepted} achieved=${baselineResult.achievedRps}rps (${baselineAchievedEventsPerMin} events/min achieved) errors=${JSON.stringify(baselineResult.errsByStatus)}`);
 
     // Wait for pipeline to drain
     console.log('\n[load-test] Waiting for pipeline to drain...');
     const drainStart = Date.now();
-    const maxDepths = [];
 
-    // Sample queue depth during drain
-    const depthSampler = sampleQueueDepth(queue, 1000, 120000);
+    // Sample queue depth during drain every 1000ms
+    const queueSamplingIntervalMs = 1000;
+    const depthSampler = sampleQueueDepth(queue, queueSamplingIntervalMs, 120000);
 
     await new Promise((resolve) => {
       const check = async () => {
@@ -385,7 +393,7 @@ async function main() {
     const depths = await depthSampler;
     const maxQueueDepth = depths.length > 0 ? Math.max(...depths) : 0;
 
-    console.log(`[load-test] Pipeline drained in ${drainMs}ms, maxQueueDepth=${maxQueueDepth}`);
+    console.log(`[load-test] Pipeline drained in ${drainMs}ms, maxQueueDepth=${maxQueueDepth} (sampled every ${queueSamplingIntervalMs}ms)`);
 
     // Final counts
     const finalCounts = await db.collection('events').aggregate([
@@ -433,10 +441,10 @@ async function main() {
     const date = new Date().toISOString();
 
     const stageTable = [
-      '| Stage (RPS) | Duration (s) | Sent | Accepted | Errors | Achieved RPS | p50 (ms) | p95 (ms) | p99 (ms) | max (ms) |',
+      '| Target RPS | Duration (s) | Sent | Accepted | Errors | Achieved RPS | p50 (ms) | p95 (ms) | p99 (ms) | max (ms) |',
       '|---|---|---|---|---|---|---|---|---|---|',
       ...stageResults.map(r => `| ${r.targetRps} | ${r.durationSec} | ${r.sent} | ${r.accepted} | ${JSON.stringify(r.errsByStatus)} | ${r.achievedRps} | ${r.p50} | ${r.p95} | ${r.p99} | ${r.max} |`),
-      `| baseline (8 rps≈500/min) | 180 | ${baselineResult.sent} | ${baselineResult.accepted} | ${JSON.stringify(baselineResult.errsByStatus)} | ${baselineResult.achievedRps} | ${baselineResult.p50} | ${baselineResult.p95} | ${baselineResult.p99} | ${baselineResult.max} |`,
+      `| baseline (${Math.round(baselineTargetRps * 10) / 10} target, 500/min) | ${baselineResult.durationSec} | ${baselineResult.sent} | ${baselineResult.accepted} | ${JSON.stringify(baselineResult.errsByStatus)} | ${baselineResult.achievedRps} (achieved ${baselineAchievedEventsPerMin} events/min) | ${baselineResult.p50} | ${baselineResult.p95} | ${baselineResult.p99} | ${baselineResult.max} |`,
     ];
 
     const perfContent = `# Hookmend Load Test Results
@@ -459,20 +467,32 @@ RAM: ${machine.ram}
 - \`INGEST_RATE_LIMIT_MAX=100000\` — default per-source limit bypassed for this run; real production should use a much lower value
 - Concurrency cap: ${concurrency} concurrent in-flight requests
 - Stage duration: ${stageDuration}s per stage
+- Queue depth sampling interval: ${queueSamplingIntervalMs}ms
 
-## Stage Results
+## Stage Results (Target vs. Achieved)
 
 ${stageTable.join('\n')}
+
+## Baseline Measurement
+
+- Target rate: 500 events/min (~8.33 target RPS)
+- Duration: ${baselineResult.durationSec}s (target: 1500 events)
+- Total sent: ${baselineResult.sent}
+- Total accepted: ${baselineResult.accepted}
+- Achieved rate: ${baselineAchievedEventsPerMin} events/min
+- Achieved RPS: ${baselineResult.achievedRps}
+- HTTP errors: ${JSON.stringify(baselineResult.errsByStatus)}
 
 ## Drain & Pipeline
 
 - Time to drain: ${drainMs}ms (${Math.round(drainMs / 1000)}s)
+- Queue depth sampling interval: ${queueSamplingIntervalMs}ms
 - Max queue depth sampled: ${maxQueueDepth} (waiting+active+delayed)
-- Total accepted: ${totalAccepted}
+- Total accepted across all stages: ${totalAccepted}
 - Delivered: ${delivered}
 - Dead: ${dead}
 
-## Assertions (Spec Baseline: ~500 events/min for 3 minutes)
+## Assertions (Spec Baseline: 500 events/min for 3 minutes)
 
 ${assertions.map(a => `- ${a}`).join('\n')}
 

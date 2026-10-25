@@ -311,3 +311,12 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
 - Enforces strict real Docker Mongo + Redis check on startup; fails clearly with exit code 1 if unreachable (no in-memory fallback per D51).
 - Added `npm run chaos` script to root `package.json`.
 - Script automatically measures and writes `docs/CHAOS.md` from real execution results (no invented numbers).
+
+## Phase 4 STEP 4 — Load Test Runner & Baseline Verification [DONE]
+- Implemented `packages/worker/scripts/load-test.js` per D53:
+  - Supports staged RPS ramp (10, 25, 50, 100 RPS) and spec baseline (500 events/min for 3 minutes).
+  - Configures `INGEST_RATE_LIMIT_MAX=100000` to bypass default ingest rate limiter for benchmark run.
+  - Automatically verifies: 0 HTTP errors, 0 dead events, received == delivered.
+  - Writes `docs/PERF.md` from real execution metrics (latencies, throughput, queue depth, error rates) without hand-written estimations.
+  - Exits with clear error code 1 if MongoDB/Redis are unreachable.
+- Added `npm run load-test` script to root `package.json`.

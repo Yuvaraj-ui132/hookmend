@@ -55,15 +55,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
       redis:
         image: redis:7
         ports:
@@ -86,20 +77,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Start MongoDB replica set
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:7 mongod --replSet rs0 --bind_ip_all
+
       - name: Wait for Mongo to be healthy
         run: |
-          echo "Polling MongoDB..."
+          echo "Polling MongoDB replica set..."
           timeout=60
-          while ! node -e "const { MongoClient } = require('mongodb'); const c = new MongoClient('mongodb://localhost:27017/admin?directConnection=true', { serverSelectionTimeoutMS: 2000 }); c.connect().then(() => c.db('admin').command({ ping: 1 })).then(() => { c.close(); process.exit(0); }).catch(() => process.exit(1));" >/dev/null 2>&1; do
+          while ! node -e "const { MongoClient } = require('mongodb'); const c = new MongoClient('mongodb://localhost:27017/admin?directConnection=true', { serverSelectionTimeoutMS: 2000 }); async function check() { await c.connect(); const admin = c.db('admin'); try { const h = await admin.command({ hello: 1 }); if (!h.setName) { await admin.command({ replSetInitiate: { _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] } }); } } catch (e) { if (e.codeName !== 'AlreadyInitialized') throw e; } const s = await admin.command({ hello: 1 }); await c.close(); if (s.isWritablePrimary) process.exit(0); else process.exit(1); } check().catch(() => { c.close().catch(() => {}); process.exit(1); });" >/dev/null 2>&1; do
+            if [ "$(docker inspect -f '{{.State.Running}}' mongo 2>/dev/null)" != "true" ]; then
+              echo "MongoDB container is not running"
+              docker logs mongo || true
+              exit 1
+            fi
             timeout=$((timeout - 1))
             if [ $timeout -le 0 ]; then
-              echo "MongoDB did not become healthy in time"
-              docker logs $(docker ps -q --filter ancestor=mongo:7) || true
+              echo "MongoDB replica set did not become healthy and PRIMARY in time"
+              docker logs mongo || true
               exit 1
             fi
             sleep 1
           done
-          echo "MongoDB is healthy"
+          echo "MongoDB replica set rs0 is healthy and PRIMARY"
 
       - name: Wait for Redis to be healthy
         run: |
@@ -119,7 +119,7 @@ jobs:
       - name: Run seed
         run: npm run seed
         env:
-          MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true
+          MONGODB_URI: mongodb://localhost:27017/hookmend?replicaSet=rs0&directConnection=true
           REDIS_URL: redis://localhost:6379
           ADMIN_API_TOKEN: ci-integration-admin-token-seed
           SIM_WEBHOOK_SECRET: ci-sim-secret
@@ -128,7 +128,7 @@ jobs:
       - name: Phase 1 exit test
         run: npm run exit-test:phase1
         env:
-          MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true
+          MONGODB_URI: mongodb://localhost:27017/hookmend?replicaSet=rs0&directConnection=true
           REDIS_URL: redis://localhost:6379
           ADMIN_API_TOKEN: ci-integration-admin-token-phase1
           SIM_WEBHOOK_SECRET: ci-sim-secret
@@ -137,7 +137,7 @@ jobs:
       - name: Phase 2 exit test
         run: npm run exit-test:phase2
         env:
-          MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true
+          MONGODB_URI: mongodb://localhost:27017/hookmend?replicaSet=rs0&directConnection=true
           REDIS_URL: redis://localhost:6379
           ADMIN_API_TOKEN: ci-integration-admin-token-phase2
           SIM_WEBHOOK_SECRET: ci-sim-secret
@@ -146,7 +146,7 @@ jobs:
       - name: Phase 3A exit test
         run: npm run exit-test:phase3a
         env:
-          MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true
+          MONGODB_URI: mongodb://localhost:27017/hookmend?replicaSet=rs0&directConnection=true
           REDIS_URL: redis://localhost:6379
           ADMIN_API_TOKEN: ci-integration-admin-token-phase3a
           SIM_WEBHOOK_SECRET: ci-sim-secret
@@ -156,7 +156,7 @@ jobs:
       - name: Phase 3B exit test
         run: npm run exit-test:phase3b
         env:
-          MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true
+          MONGODB_URI: mongodb://localhost:27017/hookmend?replicaSet=rs0&directConnection=true
           REDIS_URL: redis://localhost:6379
           ADMIN_API_TOKEN: ci-integration-admin-token-phase3b
           SIM_WEBHOOK_SECRET: ci-sim-secret
@@ -165,7 +165,7 @@ jobs:
       - name: Phase 4 exit test
         run: npm run exit-test:phase4
         env:
-          MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true
+          MONGODB_URI: mongodb://localhost:27017/hookmend?replicaSet=rs0&directConnection=true
           REDIS_URL: redis://localhost:6379
           ADMIN_API_TOKEN: ci-integration-admin-token-phase4
           SIM_WEBHOOK_SECRET: ci-sim-secret
@@ -179,7 +179,7 @@ jobs:
         # C1, C2, C4 are safe: they use ioredis directly or kill/respawn workers, not service containers.
         run: npm run chaos -- --ci --only C1,C2,C4
         env:
-          MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true
+          MONGODB_URI: mongodb://localhost:27017/hookmend?replicaSet=rs0&directConnection=true
           REDIS_URL: redis://localhost:6379
           ADMIN_API_TOKEN: ci-integration-admin-token-chaos
           SIM_WEBHOOK_SECRET: ci-sim-secret
@@ -192,6 +192,8 @@ jobs:
           name: chaos-results
           path: docs/CHAOS.md
 
-      - name: Teardown docker compose
+      - name: Teardown
         if: always()
-        run: docker compose -f infra/docker-compose.yml down -v || true
+        run: |
+          docker rm -f mongo 2>/dev/null || true
+          docker compose -f infra/docker-compose.yml down -v || true

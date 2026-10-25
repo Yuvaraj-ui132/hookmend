@@ -18,6 +18,10 @@ export function createAnalyzeDriftWorker({ db, queue, aiClient, config = {}, log
     connectTimeout: 5000,
   });
 
+  redisConnection.on('error', (err) => {
+    logger.warn?.({ err: err?.message || err }, 'analyze-drift Redis connection warning');
+  });
+
   const rpmLimit = Number(config.GEMINI_RPM_LIMIT || DEFAULT_CONFIG.GEMINI_RPM_LIMIT || 10);
 
   const worker = new Worker(
@@ -56,6 +60,10 @@ export function createAnalyzeDriftWorker({ db, queue, aiClient, config = {}, log
       },
     }
   );
+
+  worker.on('error', (err) => {
+    logger.warn?.({ err: err?.message || err }, 'analyze-drift BullMQ worker warning');
+  });
 
   return {
     worker,

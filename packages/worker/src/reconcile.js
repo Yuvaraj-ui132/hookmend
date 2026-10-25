@@ -77,7 +77,7 @@ export async function reconcileOnce({
       );
       recoveredReceived++;
     } catch (err) {
-      logger.error?.({ err, eventId: ev.eventId }, 'Reconciliation failed to enqueue received event');
+      logger.warn?.({ err: err?.message || err, eventId: ev.eventId }, 'Reconciliation failed to enqueue received event');
     }
   }
 
@@ -106,7 +106,7 @@ export async function reconcileOnce({
       );
       recoveredRequeuePending++;
     } catch (err) {
-      logger.error?.({ err, eventId: ev.eventId }, 'Reconciliation failed to enqueue requeue_pending event');
+      logger.warn?.({ err: err?.message || err, eventId: ev.eventId }, 'Reconciliation failed to enqueue requeue_pending event');
     }
   }
 
@@ -188,7 +188,7 @@ export async function reconcileOnce({
       );
       recoveredStaleProcessing++;
     } catch (err) {
-      logger.error?.({ err, eventId: ev.eventId }, 'Reconciliation failed to re-enqueue stale processing/failed event');
+      logger.warn?.({ err: err?.message || err, eventId: ev.eventId }, 'Reconciliation failed to re-enqueue stale processing/failed event');
     }
   }
 

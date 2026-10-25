@@ -337,4 +337,49 @@ describe('reconcileOnce', () => {
     const updated = await db.collection('events').findOne({ _id: staleEvent.insertedId });
     expect(updated.status).toBe('requeue_pending');
   });
+
+  it('reconcile loop survives queue.enqueue failures and continues on next interval with warn log', async () => {
+    const { startReconcileLoop } = await import('../src/main.js');
+    const oldReceivedAt = new Date(Date.now() - 120000);
+
+    await db.collection('events').insertOne({
+      eventId: 'evt_fail_then_ok',
+      status: 'received',
+      receivedAt: oldReceivedAt,
+      updatedAt: oldReceivedAt,
+    });
+
+    let calls = 0;
+    const fakeQueue = {
+      enqueue: vi.fn().mockImplementation(() => {
+        calls++;
+        if (calls === 1) {
+          return Promise.reject(new Error("Stream isn't writeable and enableOfflineQueue options is false"));
+        }
+        return Promise.resolve({ id: 'recovered-job' });
+      }),
+    };
+    const fakeLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const loop = startReconcileLoop({
+      db,
+      queue: fakeQueue,
+      config: {
+        RECONCILE_INTERVAL_MS: 25,
+        RECONCILE_MIN_AGE_MS: 1000,
+        STALE_JOB_THRESHOLD_MS: 10000,
+      },
+      logger: fakeLogger,
+    });
+
+    try {
+      // Wait for at least two intervals (first throws error, second succeeds)
+      await new Promise((r) => setTimeout(r, 120));
+
+      expect(calls).toBeGreaterThanOrEqual(2);
+      expect(fakeLogger.warn).toHaveBeenCalled();
+    } finally {
+      loop.stop();
+    }
+  });
 });

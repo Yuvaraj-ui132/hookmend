@@ -44,6 +44,10 @@ export function createProcessEventWorker({ db, queue, config, logger }) {
     connectTimeout: 5000,
   });
 
+  redisConnection.on('error', (err) => {
+    logger.warn?.({ err: err?.message || err }, 'process-event Redis connection warning');
+  });
+
   const worker = new Worker(
     QUEUE_NAMES.PROCESS_EVENT,
     async (job) => {
@@ -74,6 +78,10 @@ export function createProcessEventWorker({ db, queue, config, logger }) {
       },
     }
   );
+
+  worker.on('error', (err) => {
+    logger.warn?.({ err: err?.message || err }, 'process-event BullMQ worker warning');
+  });
 
   // D13: Safety net on worker failure
   worker.on('failed', async (job, err) => {

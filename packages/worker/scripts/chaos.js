@@ -462,6 +462,8 @@ async function scenarioC1() {
 // ── C2: Redis down during ingest ──────────────────────────────────────────────
 async function scenarioC2() {
   receiver.setMode('ok');
+  const worker = spawnWorker();
+  await waitWorkerReady(worker, 2000);
 
   // Stop Redis via docker compose
   console.log('[chaos] C2: stopping Redis via docker compose');
@@ -496,6 +498,7 @@ async function scenarioC2() {
   // Wait for all events to be delivered via reconciliation
   const timeout = isCI ? 90000 : 120000;
   const { counts, elapsed, timedOut } = await waitAllDelivered(db, n, timeout);
+  await killWorker(worker);
   const secondsToLastDelivery = Math.round((elapsed) / 1000);
 
   const delivered = counts.delivered || 0;

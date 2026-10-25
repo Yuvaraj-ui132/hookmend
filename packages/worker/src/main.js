@@ -17,6 +17,33 @@ import { createAnalyzeDriftWorker } from './analyze-drift/index.js';
 import { reconcileOnce } from './reconcile.js';
 import { createGeminiClient } from './ai/gemini.js';
 
+export function startReconcileLoop({ db, queue, config = {}, logger = console }) {
+  const intervalMs = config.RECONCILE_INTERVAL_MS || 300000;
+  let running = true;
+  let timer = null;
+
+  async function tick() {
+    if (!running) return;
+    try {
+      await reconcileOnce({ db, queue, config, logger });
+    } catch (err) {
+      logger.warn?.({ err: err?.message || err }, 'Periodic reconciliation failed; will retry on next interval');
+    }
+    if (running) {
+      timer = setTimeout(tick, intervalMs);
+    }
+  }
+
+  timer = setTimeout(tick, intervalMs);
+
+  return {
+    stop() {
+      running = false;
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
 /**
  * Starts worker process and background reconciliation.
  */
@@ -27,6 +54,21 @@ export async function startWorkerApp(overrides = {}) {
     REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
     QUEUE_PREFIX: process.env.QUEUE_PREFIX || DEFAULT_CONFIG.QUEUE_PREFIX,
     WORKER_CONCURRENCY: process.env.WORKER_CONCURRENCY || '5',
+    WORKER_LOCK_DURATION_MS: process.env.WORKER_LOCK_DURATION_MS,
+    WORKER_STALLED_INTERVAL_MS: process.env.WORKER_STALLED_INTERVAL_MS,
+    WORKER_MAX_STALLED_COUNT: process.env.WORKER_MAX_STALLED_COUNT,
+    RECONCILE_INTERVAL_MS: process.env.RECONCILE_INTERVAL_MS
+      ? parseInt(process.env.RECONCILE_INTERVAL_MS, 10)
+      : DEFAULT_CONFIG.RECONCILE_INTERVAL_MS,
+    RECONCILE_MIN_AGE_MS: process.env.RECONCILE_MIN_AGE_MS
+      ? parseInt(process.env.RECONCILE_MIN_AGE_MS, 10)
+      : DEFAULT_CONFIG.RECONCILE_MIN_AGE_MS,
+    STALE_JOB_THRESHOLD_MS: process.env.STALE_JOB_THRESHOLD_MS
+      ? parseInt(process.env.STALE_JOB_THRESHOLD_MS, 10)
+      : DEFAULT_CONFIG.STALE_JOB_THRESHOLD_MS,
+    PROCESS_EVENT_BACKOFF_BASE_MS: process.env.PROCESS_EVENT_BACKOFF_BASE_MS,
+    PROCESS_EVENT_BACKOFF_MAX_MS: process.env.PROCESS_EVENT_BACKOFF_MAX_MS,
+    PROCESS_EVENT_ATTEMPTS: process.env.PROCESS_EVENT_ATTEMPTS,
     ENABLE_AI: process.env.ENABLE_AI === 'true',
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
     GEMINI_MODEL: process.env.GEMINI_MODEL,
@@ -57,21 +99,14 @@ export async function startWorkerApp(overrides = {}) {
     const result = await reconcileOnce({ db, queue, config, logger });
     logger.info({ result }, 'Initial reconciliation pass complete');
   } catch (recErr) {
-    logger.error?.({ recErr }, 'Initial reconciliation pass failed');
+    logger.warn?.({ err: recErr?.message || recErr }, 'Initial reconciliation pass failed; periodic runner will retry');
   }
 
   // Periodic reconciliation
-  const intervalMs = config.RECONCILE_INTERVAL_MS || 300000;
-  const reconcileTimer = setInterval(async () => {
-    try {
-      await reconcileOnce({ db, queue, config, logger });
-    } catch (err) {
-      logger.error?.({ err }, 'Periodic reconciliation failed');
-    }
-  }, intervalMs);
+  const reconcileRunner = startReconcileLoop({ db, queue, config, logger });
 
   async function stop() {
-    clearInterval(reconcileTimer);
+    reconcileRunner.stop();
     await processEventWorker.close();
     await analyzeDriftWorker.close();
     if (!overrides.queue) await queue.close();

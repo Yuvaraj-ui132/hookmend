@@ -330,3 +330,16 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
   - Job 2 (`integration`): executes on top of docker service containers for `mongo:7` and `redis:7` with health checks, runs `npm run seed`, all exit-tests (`phase1`, `phase2`, `phase3a`, `phase3b`), and chaos scenarios `C1,C2,C4`, saving artifacts.
 - Audited production dependencies (`npm audit --omit=dev --audit-level=critical` passes with 0 critical vulnerabilities).
 - Documented D49–D56 in `docs/SPEC.md` Section 22 and Section 23 with rationale for audit thresholds and chaos/load testing parameters.
+
+## Phase 4 STEP 6 — Exit Test Phase 4 Script & Verification [DONE]
+- Implemented `packages/worker/scripts/exit-test-phase4.js` asserting Scenarios A through H:
+  - Scenario A: D54(a) Payload > MAX_BODY_SIZE (512 bytes) returns 413 Payload Too Large and zero documents are written to MongoDB.
+  - Scenario B: D54(c) Admin auth returns 401 on missing, invalid, or malformed Authorization headers.
+  - Scenario C: D54(d) Secure headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`) verified on `/api/*` endpoints.
+  - Scenario D: D54(e) Production token startup guard rejects tokens under 24 characters when `NODE_ENV === 'production'`.
+  - Scenario E: D50 Receiver slow mode (`POST /__mode { mode: "slow", delayMs: 600 }`) verified with realistic delivery latency.
+  - Scenario F: D52/C3 Reconcile recovers stale processing event, increments `requeueSeq`, and delivers through worker pipeline.
+  - Scenario G: D51 & D53 Chaos and Load test runners exist, compile cleanly, and fail with exit code 1 when infrastructure is unreachable.
+  - Scenario H: D55 & D56 CI workflow structure passes least privilege checks, `npm audit --omit=dev --audit-level=critical` passes, and dashboard build artifact (`dist/index.html`) is verified.
+- Added `npm run exit-test:phase4` script to root `package.json`.
+- Enforces strict real Docker Mongo + Redis check on startup; fails clearly with exit code 1 if unreachable (no in-memory fallback per D51).

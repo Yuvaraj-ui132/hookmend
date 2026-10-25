@@ -22,6 +22,23 @@ export function createProcessEventWorker({ db, queue, config, logger }) {
   const prefix = config.QUEUE_PREFIX || process.env.QUEUE_PREFIX || DEFAULT_CONFIG.QUEUE_PREFIX;
   const concurrency = parseInt(config.WORKER_CONCURRENCY || '5', 10);
 
+  // D49: Configurable BullMQ Worker knobs; defaults equal BullMQ's own defaults.
+  // lockDuration: 30000 ms (how long a job lock is held before stall check can reclaim it)
+  // stalledInterval: 30000 ms (how often BullMQ checks for stalled jobs)
+  // maxStalledCount: 1 (max times a job can stall before being moved to failed)
+  const lockDuration = parseInt(
+    config.WORKER_LOCK_DURATION_MS || process.env.WORKER_LOCK_DURATION_MS || '30000',
+    10
+  );
+  const stalledInterval = parseInt(
+    config.WORKER_STALLED_INTERVAL_MS || process.env.WORKER_STALLED_INTERVAL_MS || '30000',
+    10
+  );
+  const maxStalledCount = parseInt(
+    config.WORKER_MAX_STALLED_COUNT || process.env.WORKER_MAX_STALLED_COUNT || '1',
+    10
+  );
+
   const redisConnection = new Redis(redisUrl, {
     maxRetriesPerRequest: null, // Required by BullMQ worker
     connectTimeout: 5000,
@@ -45,6 +62,9 @@ export function createProcessEventWorker({ db, queue, config, logger }) {
       connection: redisConnection,
       prefix,
       concurrency,
+      lockDuration,
+      stalledInterval,
+      maxStalledCount,
       settings: {
         backoffStrategy(attemptsMade) {
           const baseMs = parseInt(config?.PROCESS_EVENT_BACKOFF_BASE_MS || '1000', 10);

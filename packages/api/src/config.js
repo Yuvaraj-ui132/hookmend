@@ -13,8 +13,12 @@ function getConfig() {
   const NODE_ENV = process.env.NODE_ENV || 'development';
   const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || 'change-me';
 
-  if (NODE_ENV === 'production' && (!ADMIN_API_TOKEN || ADMIN_API_TOKEN === 'change-me')) {
-    throw new Error('ADMIN_API_TOKEN must be set to a secure value in production');
+  if (NODE_ENV === 'production') {
+    if (!ADMIN_API_TOKEN || ADMIN_API_TOKEN === 'change-me' || ADMIN_API_TOKEN.length < 24) {
+      throw new Error(
+        'ADMIN_API_TOKEN must be set to a secure value of at least 24 characters in production'
+      );
+    }
   }
 
   return {

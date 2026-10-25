@@ -5,13 +5,19 @@
  * Exposes:
  *   POST /receive  — Main webhook destination
  *   GET  /__stats  — Request counts per x-hookmend-event-id
- *   POST /__mode   — Change behavior: "ok" | "fail503" | "fail400" | "timeout"
+ *   POST /__mode   — Change behavior: "ok" | "fail503" | "fail400" | "timeout" | "slow"
+ *
+ * D50: "slow" mode accepts delayMs parameter:
+ *   POST /__mode { mode: "slow", delayMs: 3000 }
+ * Requests are held for delayMs before responding, simulating a slow downstream.
+ * The delay can also be set programmatically via setMode('slow', delayMs).
  */
 
 import { createServer } from 'node:http';
 
 export function startReceiver({ port = 4001 } = {}) {
   let mode = 'ok';
+  let slowDelayMs = 0;
   const stats = {};
   let totalRequests = 0;
 
@@ -32,11 +38,15 @@ export function startReceiver({ port = 4001 } = {}) {
         try {
           const json = JSON.parse(body || '{}');
           if (json.mode) mode = json.mode;
+          // D50: accept delayMs for slow mode
+          if (json.mode === 'slow' && typeof json.delayMs === 'number') {
+            slowDelayMs = json.delayMs;
+          }
         } catch {
           // ignore
         }
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ mode }));
+        res.end(JSON.stringify({ mode, slowDelayMs }));
       });
       return;
     }
@@ -70,6 +80,18 @@ export function startReceiver({ port = 4001 } = {}) {
           return;
         }
 
+        // D50: slow mode — respond after delayMs
+        if (mode === 'slow') {
+          const delay = slowDelayMs > 0 ? slowDelayMs : 0;
+          setTimeout(() => {
+            if (!res.writableEnded) {
+              res.writeHead(200, { 'content-type': 'application/json' });
+              res.end(JSON.stringify({ ok: true, eventId, slow: true }));
+            }
+          }, delay);
+          return;
+        }
+
         // Default: ok (200)
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, eventId }));
@@ -88,13 +110,22 @@ export function startReceiver({ port = 4001 } = {}) {
         server,
         port: resolvedPort,
         getStats: () => ({ stats: { ...stats }, totalRequests }),
-        setMode: (m) => {
+        /**
+         * Set receiver mode.
+         * @param {string} m - 'ok' | 'fail503' | 'fail400' | 'timeout' | 'slow'
+         * @param {number} [delayMs] - Only for 'slow' mode; delay in milliseconds
+         */
+        setMode: (m, delayMs) => {
           mode = m;
+          if (m === 'slow' && typeof delayMs === 'number') {
+            slowDelayMs = delayMs;
+          }
         },
         clear: () => {
           for (const k of Object.keys(stats)) delete stats[k];
           totalRequests = 0;
           mode = 'ok';
+          slowDelayMs = 0;
         },
         close: () => new Promise((cb) => server.close(cb)),
       });

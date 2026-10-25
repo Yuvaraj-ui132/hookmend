@@ -66,7 +66,7 @@ export async function processEvent({ job, db, deps }) {
         ],
       },
     },
-    { $set: { status: EVENT_STATUS.PROCESSING, updatedAt: now } }
+    { $set: { status: EVENT_STATUS.PROCESSING, statusChangedAt: now, updatedAt: now } }
   );
 
   // 2. Fetch source
@@ -120,6 +120,7 @@ export async function processEvent({ job, db, deps }) {
         schemaVersion,
         validationErrors: validationResult.errors.slice(0, 20),
         validated: true,
+        statusChangedAt: quarantinedAt,
         updatedAt: quarantinedAt,
       };
 
@@ -224,6 +225,7 @@ export async function processEvent({ job, db, deps }) {
           expireAt,
           validated,
           schemaVersion,
+          statusChangedAt: deliveredAt,
           updatedAt: deliveredAt,
         },
       }
@@ -267,6 +269,7 @@ export async function processEvent({ job, db, deps }) {
             message: errorMsg,
             at: failedAt,
           },
+          statusChangedAt: failedAt,
           updatedAt: failedAt,
         },
         $inc: { deliveryAttempts: 1 },
@@ -298,6 +301,7 @@ export async function processEvent({ job, db, deps }) {
           message: errorMsg,
           at: deadAt,
         },
+        statusChangedAt: deadAt,
         updatedAt: deadAt,
       },
       $inc: { deliveryAttempts: 1 },

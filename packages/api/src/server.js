@@ -9,6 +9,7 @@ import express from 'express';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { createCorsMiddleware } from './middleware/cors.js';
+import { secureHeaders } from './middleware/secureHeaders.js';
 import { createHealthRouter } from './routes/health.js';
 import { createIngestRouter } from './routes/ingest.js';
 import { createAdminRouter } from './routes/admin.js';
@@ -33,6 +34,9 @@ export function createApp({ db, queue, config, watcher = null }) {
   // CORS — ONLY for /api routes (not /ingest) (D40)
   const corsMiddleware = createCorsMiddleware(config);
   app.use('/api', corsMiddleware);
+
+  // Secure headers — D54(d): applied to all /api responses
+  app.use('/api', secureHeaders);
 
   // Routes
   app.use(createHealthRouter({ db, queue, config, watcher, sseClientCount: getClientCount }));

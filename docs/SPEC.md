@@ -983,6 +983,7 @@ hookmend/
 5. **No End-to-End Payload Encryption:** Payloads are stored plaintext in MongoDB. Production deployment requires field-level encryption.
 6. **Single-Worker Reconciliation Instance:** Background reconciliation assumes a single worker instance polling MongoDB (no distributed leader election). Production multi-instance deployments require leader election (e.g. Redlock or MongoDB lease locks) to prevent redundant enqueueing.
 7. **At-Least-Once Delivery Contract:** Downstream delivery guarantees at-least-once delivery; downstream webhook receivers must implement deduplication using the provided `x-hookmend-event-id` header.
+8. **React Router Dependency Advisories:** `npm audit --omit=dev --audit-level=high` passes with 0 high/critical issues after `npm audit fix`. Two moderate-severity advisories remain in `react-router` / `react-router-dom` 6.x (GHSA-wrjc-x8rr-h8h6: Link redirect via backslash bypass; GHSA-337j-9hxr-rhxg: arbitrary constructor injection in SSR hydration). Fixing them requires a breaking major upgrade to v7 (`npm audit fix --force`). Since the Hookmend dashboard is served as a client-side SPA static bundle with no SSR hydration and no user-supplied redirect links, there is no exploitable surface in this application. Upgrade to react-router-dom v7 is tracked as a future milestone.
 
 
 ---

@@ -350,3 +350,9 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
 3. In chaos C2, spawnWorker() was completely omitted from scenarioC2, leaving zero worker processes running to consume or reconcile events.
 4. During Redis outages, queue.enqueue() failed due to enableOfflineQueue:false, but error handling was robust; the true blockage was the reconciler's dormant timer.
 5. In C3 FLUSHALL, in-flight Redis jobs were deleted, but events in 'received' and 'processing' were not reconciled before the 120s timeout due to the 300s interval/thresholds.
+
+## Phase 4 Fix — STEP 4 Security Audit Remediation [DONE]
+- Executed `npm audit fix` (non-breaking): resolved high severity advisory in `body-parser` and moderate advisories in `fast-uri`.
+- Verified production build and tests: `npm test` passes (325/325 tests), `npm run build:dashboard` succeeds (`dist/index.html` generated).
+- Ran `npm audit --omit=dev --audit-level=high`: passes with 0 high or critical vulnerabilities.
+- Remaining findings: 2 moderate-severity advisories in `react-router` / `react-router-dom` 6.x (GHSA-wrjc-x8rr-h8h6, GHSA-337j-9hxr-rhxg). Both require a breaking v7 upgrade (`npm audit fix --force`); concern SSR hydration and `<Link>` redirect path traversal, neither of which has an attack surface in the static client-side dashboard SPA. Documented in `docs/SPEC.md` Section 18.

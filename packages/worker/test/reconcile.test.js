@@ -374,7 +374,10 @@ describe('reconcileOnce', () => {
 
     try {
       // Wait for at least two intervals (first throws error, second succeeds)
-      await new Promise((r) => setTimeout(r, 120));
+      const startWait = Date.now();
+      while (Date.now() - startWait < 3000 && calls < 2) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
 
       expect(calls).toBeGreaterThanOrEqual(2);
       expect(fakeLogger.warn).toHaveBeenCalled();

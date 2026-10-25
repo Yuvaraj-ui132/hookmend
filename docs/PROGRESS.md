@@ -320,3 +320,13 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
   - Writes `docs/PERF.md` from real execution metrics (latencies, throughput, queue depth, error rates) without hand-written estimations.
   - Exits with clear error code 1 if MongoDB/Redis are unreachable.
 - Added `npm run load-test` script to root `package.json`.
+
+## Phase 4 STEP 5 — CI Workflow & Security Audit Documentation [DONE]
+- Created GitHub Actions CI workflow `.github/workflows/ci.yml` per D55:
+  - Triggers on push and pull_request across branches.
+  - Principle of least privilege: `permissions: contents: read`.
+  - Actions pinned to major versions (`actions/checkout@v4`, `actions/setup-node@v4`), caching npm.
+  - Job 1 (`test`): `npm ci`, `npm test` across all workspaces, `npm run build:dashboard`, `npm audit --omit=dev --audit-level=critical`.
+  - Job 2 (`integration`): executes on top of docker service containers for `mongo:7` and `redis:7` with health checks, runs `npm run seed`, all exit-tests (`phase1`, `phase2`, `phase3a`, `phase3b`), and chaos scenarios `C1,C2,C4`, saving artifacts.
+- Audited production dependencies (`npm audit --omit=dev --audit-level=critical` passes with 0 critical vulnerabilities).
+- Documented D49–D56 in `docs/SPEC.md` Section 22 and Section 23 with rationale for audit thresholds and chaos/load testing parameters.

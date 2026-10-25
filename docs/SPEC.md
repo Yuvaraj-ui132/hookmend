@@ -1105,4 +1105,55 @@ Event Type:
 
 ---
 
-*End of SPEC.md — v0.2.0*
+## 22. Phase 4 Decision Log (D49-D56)
+
+- **D49**: BullMQ Worker knobs (`WORKER_LOCK_DURATION_MS`, `WORKER_STALLED_INTERVAL_MS`, `WORKER_MAX_STALLED_COUNT`) made configurable via environment variables. Defaults equal BullMQ's own defaults (30000ms, 30000ms, 1). Chaos runner uses shortened values (4000ms, 2000ms, 3) to allow stall detection within seconds in tests.
+
+- **D50**: `packages/simulator/src/receiver.js` extended with `slow` mode: `setMode('slow', delayMs)` and `POST /__mode {mode:'slow', delayMs}`. Useful for chaos C1 (worker kill mid-delivery) and manual testing.
+
+- **D51**: Chaos test runner (`packages/worker/scripts/chaos.js`) requires real docker-compose MongoDB and Redis. `process.exit(1)` if either is unreachable. No in-memory fallback. Outputs `docs/CHAOS.md` from real measured results.
+
+- **D52/C3**: Reconciler updated to detect stale `processing` and `failed` events (whose `statusChangedAt` — or `updatedAt` as fallback — is older than `STALE_JOB_THRESHOLD_MS`). These are conditionally moved to `requeue_pending` with incremented `requeueSeq` using a conditional MongoDB update (prevent race conditions with concurrent reconcile passes). This enables at-least-once delivery recovery after Redis data loss (FLUSHALL). Downstream must deduplicate on `x-hookmend-event-id`. `statusChangedAt` added to all status transitions in `processor.js`.
+
+- **D53**: Load test runner (`packages/worker/scripts/load-test.js`) runs staged RPS ramp and a baseline spec of ~500 events/min for 3 minutes. `INGEST_RATE_LIMIT_MAX` set to 100000 for this run to bypass per-source default; documented inline. Asserts zero HTTP errors and zero lost events (dead=0). Writes `docs/PERF.md`. Infrastructure note: numbers measured on a single laptop with all services local; not to be treated as production capacity.
+
+- **D54**: Hardening checks implemented:
+  - (a) 413 on oversized body: existing `MAX_BODY_SIZE` check via `express.raw` was already correct; test added confirming nothing stored.
+  - (c) Admin auth 401: missing, malformed, wrong token all return 401; tested.
+  - (d) Secure headers middleware: `secureHeaders.js` sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on all `/api` responses.
+  - (e) Production token guard: `config.js` now also rejects `ADMIN_API_TOKEN` shorter than 24 characters in production.
+
+- **D55**: GitHub Actions CI workflow (`.github/workflows/ci.yml`):
+  - `push` + `pull_request` triggers on all branches.
+  - `permissions: contents: read` (least privilege).
+  - Action pins use major versions (`@v4`) per GitHub Actions best practices.
+  - `test` job: `npm ci` → `npm test` → `build:dashboard` → `npm audit --omit=dev --audit-level=critical`.
+  - `integration` job: docker services for mongo:7 + redis:7, health polls, exit tests phases 1-3b, chaos `--ci --only C1,C2,C4`.
+
+- **D56**: `npm audit --omit=dev --audit-level=high` finds 1 high-severity CVE in `react-router-dom 6.x` (GHSA-wrjc-x8rr-h8h6, GHSA-337j-9hxr-rhxg). The fix requires a breaking v6→v7 upgrade. The dashboard is a static bundle with no server-side rendering; these vulns have no reachable server-side path in this self-hosted webhook relay. CI uses `--audit-level=critical` as a deviation. Upgrade to react-router-dom v7 is tracked as a follow-up issue.
+
+## 23. Chaos and Performance Test Infrastructure (Phase 4)
+
+### Chaos Scenarios (C1–C7)
+
+| Scenario | Injected Fault | Pass Criteria |
+|---|---|---|
+| C1 | Worker SIGKILL mid-delivery (receiver slow 3s) | All events delivered, 0 dead, exactly N docs |
+| C2 | Redis stopped during ingest; restarted after | HTTP 200s fast (<3000ms); all events delivered after restart |
+| C3 | Redis FLUSHALL while events in flight | D52: reconcile re-enqueues stale processing; all delivered, 0 dead |
+| C4 | 100 concurrent requests with same delivery id | Exactly 1 doc, 99 dedup, receiver sees 1 request |
+| C5 | Downstream 503 < retry window | All delivered after recovery, 0 dead |
+| C6 | Downstream 503 > retry window; admin requeue | All events reach dead; requeue via admin API; all redelivered |
+| C7 | AI client always throws 429 | Proposal created with aiUsed=false, aiFailureReason=AI_RATE_LIMITED |
+
+### Load Test Parameters
+
+- **Stages**: 10, 25, 50, 100 RPS × 30s each
+- **Baseline**: ~8.3 RPS (≈500 events/min) for 180s
+- **Assertions**: 0 HTTP errors, 0 dead events
+- **Drain wait**: Up to 120s for pipeline to drain
+- **Rate limit**: `INGEST_RATE_LIMIT_MAX=100000` (bypassed for load test; see D53)
+
+---
+
+*End of SPEC.md — v0.4.0*

@@ -389,3 +389,19 @@ Audited every endpoint called by `packages/dashboard` against the real stack (`d
   (d) The check runs immediately after `sendNConcurrent(20)`; if Redis was not yet down, BullMQ enqueue succeeded for early events and the worker processed them into processing/delivered before the count. While Redis is genuinely down, reconciliation cannot touch events because BullMQ/Redis connections fail fast (`enableOfflineQueue: false`).
   (e) `--ci` sets `WAIT_MULTIPLIER = 0.7`, reducing `wait(ms)` durations, C1 delivery timeout from 90s to 60s, and C2 timeout from 120s to 90s, but raw `sleep(1500)` was unscaled.
 
+## Phase 4 CI Fix — STEP 4 Verification (C2 Synchronisation Fix) [DONE]
+- Fixed synchronisation in `packages/worker/scripts/chaos.js`:
+  - `pollRedisDown` actively polls with `enableOfflineQueue: false` until 3 consecutive connection failures before sending.
+  - Assertions maintained: all 20 HTTP responses 200 and <3000ms latency, all 20 documents stored in MongoDB (`totalStored === 20`), zero delivered while Redis is down (`deliveredWhileDown === 0`), all 20 delivered after restart.
+  - Process isolation: `killWorker` awaits process `'exit'`, `killAllWorkers()` terminates active workers in `resetForScenario()` and `teardown()`.
+  - Scoped database queries to sent `eventId`s.
+- Ran `npm run chaos -- --ci --only C1,C2,C4` 5 consecutive times locally with zero failures:
+  - Run 1: C1 PASS (2841ms recovery), C2 PASS (11232ms elapsed, all 20 delivered in 6s post-restart), C4 PASS (1623ms)
+  - Run 2: C1 PASS (3151ms recovery), C2 PASS (11273ms elapsed, all 20 delivered in 6s post-restart), C4 PASS (1518ms)
+  - Run 3: C1 PASS (3133ms recovery), C2 PASS (11367ms elapsed, all 20 delivered in 8s post-restart), C4 PASS (1640ms)
+  - Run 4: C1 PASS (2831ms recovery), C2 PASS (11251ms elapsed, all 20 delivered in 6s post-restart), C4 PASS (1538ms)
+  - Run 5: C1 PASS (2838ms recovery), C2 PASS (11297ms elapsed, all 20 delivered in 6s post-restart), C4 PASS (1510ms)
+- Ran `npm test`: 32/32 test files passed, 325/325 tests passed.
+- Updated `docs/SPEC.md` Section 23 documenting C2 synchronisation and assertions.
+- Regenerated `docs/CHAOS.md` only through the script.
+

@@ -39,12 +39,16 @@ jobs:
       - name: Build dashboard
         run: npm run build:dashboard
 
-      - name: npm audit (prod dependencies, fail on critical only)
-        # D56: react-router-dom 6.x has known high-severity CVEs (GHSA-wrjc-x8rr-h8h6, GHSA-337j-9hxr-rhxg).
-        # The fix requires a breaking v6→v7 upgrade; tracked as separate issue.
-        # These vulns have no reachable server-side path (dashboard is served as static bundle).
-        # Using --audit-level=critical to fail only on true critical vulnerabilities.
-        run: npm audit --omit=dev --audit-level=critical
+      - name: npm audit (prod dependencies only, fail on high+)
+        # Full audit (npm audit) shows 8 vulnerabilities:
+        #   - 2 critical, 1 high, 5 moderate in DEV dependencies: tinypool (vitest internals), esbuild/vite (vitest), vitest/mocker
+        #   - 2 moderate in PROD: react-router 6.x (GHSA-wrjc-x8rr-h8h6, GHSA-337j-9hxr-rhxg)
+        # --omit=dev leaves only the 2 moderate react-router advisories.
+        # react-router fix requires a breaking v6→v7 upgrade; tracked separately.
+        # These react-router CVEs affect SSR hydration and <Link> redirect — no server-side attack surface
+        # in the static SPA dashboard. Using --audit-level=high (not critical) is intentional:
+        # it would fail on any newly introduced high/critical prod dependency.
+        run: npm audit --omit=dev --audit-level=high
 
   integration:
     name: Integration Exit Tests + Chaos
@@ -157,7 +161,21 @@ jobs:
           SIM_WEBHOOK_SECRET: ci-sim-secret
           GITHUB_WEBHOOK_SECRET: ci-github-secret
 
+      - name: Phase 4 exit test
+        run: npm run exit-test:phase4
+        env:
+          MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true
+          REDIS_URL: redis://localhost:6379
+          ADMIN_API_TOKEN: ci-integration-admin-token-phase4
+          SIM_WEBHOOK_SECRET: ci-sim-secret
+          GITHUB_WEBHOOK_SECRET: ci-github-secret
+          NODE_ENV: test
+
       - name: Chaos scenarios C1, C2, C4 (CI subset)
+        # C3 (Redis FLUSHALL) and C5/C6 (downstream outage with retry window) use docker compose
+        # to stop/start service containers, which conflicts with GH Actions service container lifecycle.
+        # C7 (AI rate limit) has no meaningful failure mode in CI since ENABLE_AI=false.
+        # C1, C2, C4 are safe: they use ioredis directly or kill/respawn workers, not service containers.
         run: npm run chaos -- --ci --only C1,C2,C4
         env:
           MONGODB_URI: mongodb://localhost:27017/hookmend?directConnection=true

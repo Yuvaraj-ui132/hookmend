@@ -231,9 +231,13 @@ async function teardown() {
 
 async function runStage(targetRps, durationSec) {
   const latencies = [];
-  let sent = 0;
+  // attempted: incremented once per request in the scheduler (before dispatch)
+  // sent: incremented once per completed request inside sendOne (after response/error)
+  // accepted: HTTP 200 responses
+  // errsByStatus: non-200 and network errors
+  let attempted = 0;  // requests dispatched by scheduler
+  let sent = 0;       // requests that completed (response or error)
   let accepted = 0;
-  let dispatched = 0;
   const errsByStatus = {};
 
   const startTime = Date.now();
@@ -269,18 +273,20 @@ async function runStage(targetRps, durationSec) {
       } else {
         errsByStatus[res.status] = (errsByStatus[res.status] || 0) + 1;
       }
-    } catch (err) {
+    } catch (_err) {
       sent++;
       errsByStatus['network'] = (errsByStatus['network'] || 0) + 1;
     }
   }
 
-  // Catch-up scheduler: every 5 ms compute due = floor(elapsedSeconds * rps) - sent and send that many
+  // Catch-up scheduler: every 5 ms compute due = floor(elapsedSeconds * rps) - attempted
+  // 'attempted' is incremented here (one per dispatch); 'sent' is incremented in sendOne (one per completion).
+  // This ensures each request is counted exactly once in each counter.
   while (Date.now() < endTime) {
     const elapsedSeconds = (Date.now() - startTime) / 1000;
-    let due = Math.floor(elapsedSeconds * targetRps) - sent;
+    let due = Math.floor(elapsedSeconds * targetRps) - attempted;
     while (due > 0 && inflight.size < concurrency) {
-      sent++;
+      attempted++;
       due--;
       const p = sendOne().finally(() => inflight.delete(p));
       inflight.add(p);
@@ -288,16 +294,20 @@ async function runStage(targetRps, durationSec) {
     await sleep(5);
   }
 
-  // Drain remaining
+  // Drain remaining in-flight requests
   await Promise.all([...inflight]);
 
+  // Use actual wall-clock elapsed (includes drain time) for honest RPS calculation
   const actualElapsedSec = (Date.now() - startTime) / 1000;
   const achievedRps = actualElapsedSec > 0 ? sent / actualElapsedSec : 0;
   return {
     targetRps,
     durationSec,
-    sent,
+    actualElapsedSec: Math.round(actualElapsedSec * 10) / 10,
+    attempted,
+    sent,          // completed requests (should equal attempted after drain)
     accepted,
+    errors: sent - accepted,
     errsByStatus,
     achievedRps: Math.round(achievedRps * 10) / 10,
     p50: percentile(latencies, 50),
@@ -334,7 +344,7 @@ async function main() {
   }
 
   const stageResults = [];
-  let totalSent = 0;
+  let totalAttempted = 0;
   let totalAccepted = 0;
 
   // Determine stages to run
@@ -345,9 +355,9 @@ async function main() {
       console.log(`\n[load-test] Stage: Target ${rps} RPS for ${stageDuration}s`);
       const stageResult = await runStage(rps, stageDuration);
       stageResults.push(stageResult);
-      totalSent += stageResult.sent;
+      totalAttempted += stageResult.attempted;
       totalAccepted += stageResult.accepted;
-      console.log(`[load-test]   target=${stageResult.targetRps}rps sent=${stageResult.sent} accepted=${stageResult.accepted} achieved=${stageResult.achievedRps}rps p50=${stageResult.p50}ms p95=${stageResult.p95}ms p99=${stageResult.p99}ms max=${stageResult.max}ms`);
+      console.log(`[load-test]   target=${stageResult.targetRps}rps attempted=${stageResult.attempted} accepted=${stageResult.accepted} errors=${stageResult.errors} achieved=${stageResult.achievedRps}rps (actual ${stageResult.actualElapsedSec}s) p50=${stageResult.p50}ms p95=${stageResult.p95}ms p99=${stageResult.p99}ms max=${stageResult.max}ms`);
       await sleep(1000); // brief pause between stages
     }
 
@@ -356,10 +366,11 @@ async function main() {
     const baselineTargetRps = 500 / 60;
     console.log('\n[load-test] Running spec baseline: ~8.33 target RPS for 180s (500 events/min × 3 min = 1500 target events)');
     const baselineResult = await runStage(baselineTargetRps, 180);
-    totalSent += baselineResult.sent;
+    totalAttempted += baselineResult.attempted;
     totalAccepted += baselineResult.accepted;
-    const baselineAchievedEventsPerMin = Math.round((baselineResult.sent / (baselineResult.durationSec / 60)) * 10) / 10;
-    console.log(`[load-test]   baseline: target=${Math.round(baselineTargetRps * 10) / 10}rps sent=${baselineResult.sent} accepted=${baselineResult.accepted} achieved=${baselineResult.achievedRps}rps (${baselineAchievedEventsPerMin} events/min achieved) errors=${JSON.stringify(baselineResult.errsByStatus)}`);
+    // Use actual elapsed wall-clock time for events/min calculation, NOT configured durationSec
+    const baselineAchievedEventsPerMin = Math.round((baselineResult.sent / (baselineResult.actualElapsedSec / 60)) * 10) / 10;
+    console.log(`[load-test]   baseline: target=${Math.round(baselineTargetRps * 10) / 10}rps attempted=${baselineResult.attempted} accepted=${baselineResult.accepted} errors=${baselineResult.errors} achieved=${baselineResult.achievedRps}rps (actual ${baselineResult.actualElapsedSec}s = ${baselineAchievedEventsPerMin} events/min) errors=${JSON.stringify(baselineResult.errsByStatus)}`);
 
     // Wait for pipeline to drain
     console.log('\n[load-test] Waiting for pipeline to drain...');
@@ -425,9 +436,10 @@ async function main() {
       assertions.push('PASS: zero dead events');
     }
 
-    if (delivered < totalAccepted * 0.95) {
-      // Allow small margin for events still in-flight if worker hasn't fully drained
-      assertions.push(`WARN: only ${delivered}/${totalAccepted} accepted events delivered (may still be draining)`);
+    // All accepted events must be delivered — no silent 5% tolerance after drain timeout
+    if (delivered < totalAccepted) {
+      assertions.push(`FAIL: only ${delivered}/${totalAccepted} accepted events delivered after drain timeout`);
+      assertPass = false;
     } else {
       assertions.push(`PASS: ${delivered}/${totalAccepted} accepted events delivered`);
     }
@@ -441,10 +453,10 @@ async function main() {
     const date = new Date().toISOString();
 
     const stageTable = [
-      '| Target RPS | Duration (s) | Sent | Accepted | Errors | Achieved RPS | p50 (ms) | p95 (ms) | p99 (ms) | max (ms) |',
-      '|---|---|---|---|---|---|---|---|---|---|',
-      ...stageResults.map(r => `| ${r.targetRps} | ${r.durationSec} | ${r.sent} | ${r.accepted} | ${JSON.stringify(r.errsByStatus)} | ${r.achievedRps} | ${r.p50} | ${r.p95} | ${r.p99} | ${r.max} |`),
-      `| baseline (${Math.round(baselineTargetRps * 10) / 10} target, 500/min) | ${baselineResult.durationSec} | ${baselineResult.sent} | ${baselineResult.accepted} | ${JSON.stringify(baselineResult.errsByStatus)} | ${baselineResult.achievedRps} (achieved ${baselineAchievedEventsPerMin} events/min) | ${baselineResult.p50} | ${baselineResult.p95} | ${baselineResult.p99} | ${baselineResult.max} |`,
+      '| Target RPS | Config Duration (s) | Actual Elapsed (s) | Attempted | Accepted | Errors | Achieved RPS | p50 (ms) | p95 (ms) | p99 (ms) | max (ms) |',
+      '|---|---|---|---|---|---|---|---|---|---|---|',
+      ...stageResults.map(r => `| ${r.targetRps} | ${r.durationSec} | ${r.actualElapsedSec} | ${r.attempted} | ${r.accepted} | ${r.errors} | ${r.achievedRps} | ${r.p50} | ${r.p95} | ${r.p99} | ${r.max} |`),
+      `| baseline (~8.33 target) | ${baselineResult.durationSec} | ${baselineResult.actualElapsedSec} | ${baselineResult.attempted} | ${baselineResult.accepted} | ${baselineResult.errors} | ${baselineResult.achievedRps} | ${baselineResult.p50} | ${baselineResult.p95} | ${baselineResult.p99} | ${baselineResult.max} |`,
     ];
 
     const perfContent = `# Hookmend Load Test Results
@@ -476,21 +488,24 @@ ${stageTable.join('\n')}
 ## Baseline Measurement
 
 - Target rate: 500 events/min (~8.33 target RPS)
-- Duration: ${baselineResult.durationSec}s (target: 1500 events)
-- Total sent: ${baselineResult.sent}
-- Total accepted: ${baselineResult.accepted}
-- Achieved rate: ${baselineAchievedEventsPerMin} events/min
+- Configured duration: ${baselineResult.durationSec}s | Actual elapsed: ${baselineResult.actualElapsedSec}s
+- Attempted: ${baselineResult.attempted} requests
+- Accepted (HTTP 200): ${baselineResult.accepted}
+- Rejected/error: ${baselineResult.errors} (${JSON.stringify(baselineResult.errsByStatus)})
+- Achieved rate: ${baselineAchievedEventsPerMin} events/min (measured from actual elapsed, not configured duration)
 - Achieved RPS: ${baselineResult.achievedRps}
-- HTTP errors: ${JSON.stringify(baselineResult.errsByStatus)}
 
 ## Drain & Pipeline
 
 - Time to drain: ${drainMs}ms (${Math.round(drainMs / 1000)}s)
 - Queue depth sampling interval: ${queueSamplingIntervalMs}ms
 - Max queue depth sampled: ${maxQueueDepth} (waiting+active+delayed)
+- Total attempted across all stages: ${totalAttempted}
 - Total accepted across all stages: ${totalAccepted}
 - Delivered: ${delivered}
 - Dead: ${dead}
+
+> **Accounting**: Attempted = total HTTP requests dispatched; Accepted = HTTP 200 responses (events stored in DB); Delivered = events confirmed delivered downstream by worker. In this test the ingest server performs deduplication, so accepted ≤ attempted when duplicate delivery-ids are reused. No duplicates are intentionally sent in staged RPS tests; accepted should equal attempted barring errors.
 
 ## Assertions (Spec Baseline: 500 events/min for 3 minutes)
 
@@ -513,12 +528,12 @@ npm run load-test -- --stages "10,25,50,100" --duration 30
 
     if (!assertPass) {
       console.error('[load-test] ASSERTIONS FAILED');
-      process.exit(1);
+      process.exitCode = 1;
     } else {
       console.log('[load-test] ALL ASSERTIONS PASS');
-      process.exit(0);
     }
   } finally {
+    // Teardown always runs — process.exitCode (not process.exit) is used so this finally block executes
     await teardown();
   }
 }

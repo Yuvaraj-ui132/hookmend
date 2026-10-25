@@ -850,7 +850,7 @@ async function writeChaosDoc(machine, commit, date) {
       r.elapsedMs ? `${Math.round(r.elapsedMs / 1000)}` :
       r.elapsed ? `${Math.round(r.elapsed / 1000)}` : '—';
     const resultDetail = r.summary || r.error || '';
-    table.push(`| ${r.id} | ${faultMap[r.id] || r.name} | ${assertMap[r.id] || ''} | ${status} — ${resultDetail.slice(0, 80)} | ${recovery} |`);
+    table.push(`| ${r.id} | ${faultMap[r.id] || r.name} | ${assertMap[r.id] || ''} | ${status} — ${resultDetail} | ${recovery} |`);
   }
 
   const content = `# Hookmend Chaos Test Results

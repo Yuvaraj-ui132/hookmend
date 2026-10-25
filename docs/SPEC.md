@@ -1147,6 +1147,13 @@ Event Type:
 | C6 | Downstream 503 > retry window; admin requeue | All events reach dead; requeue via admin API; all redelivered |
 | C7 | AI client always throws 429 | Proposal created with aiUsed=false, aiFailureReason=AI_RATE_LIMITED |
 
+### C2 Synchronisation and Assertions
+To prevent races between container shutdown and concurrent webhook ingestion, scenario C2 synchronises by polling Redis PING until 3 consecutive connection failures occur before sending the 20 events. The assertions verify:
+1. Every ingest request returns HTTP 200 in under 3000ms (`maxLatency < 3000ms`).
+2. All 20 documents exist in MongoDB (`totalStored == 20`). If an event's enqueue succeeded right before socket closure, its status may legitimately advance, but zero events are lost.
+3. Zero events are delivered while Redis is confirmed down (`deliveredWhileDown == 0`).
+4. After Redis restarts, all 20 events transition to delivered (`delivered == 20`, `dead == 0`).
+
 ### Load Test Parameters
 
 - **Stages**: 10, 25, 50, 100 RPS × 30s each

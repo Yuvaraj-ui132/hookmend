@@ -6,3 +6,5 @@ data/
 *.log
 coverage/
 dist/
+scratch/
+ci-logs/

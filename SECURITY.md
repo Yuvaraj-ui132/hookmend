@@ -27,7 +27,7 @@ Reports are handled on a best-effort response basis by the maintainers.
 The following areas are in scope for security review:
 - HMAC signature verification and timestamp replay protection across provider adapters.
 - Server-Side Request Forgery (SSRF) validation on downstream delivery endpoints.
-- Payload value sanitization and redaction guarantees across logging, SSE streams, and AI proposal generation.
+- Payload value sanitization and redaction mechanisms across logging, SSE streams, and AI proposal generation.
 - Access control and authentication on administrative REST endpoints.
 - AI containment filters and schema compilation validation.
 

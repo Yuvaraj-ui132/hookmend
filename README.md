@@ -19,7 +19,7 @@ Hookmend intercepts incoming webhooks and executes the following self-healing pi
 
 1. **Raw Body Cryptographic Verification:** Computes HMAC-SHA256 signatures over the exact, unparsed request body buffer using timing-safe comparison (`crypto.timingSafeEqual`) and enforces timestamp tolerance windows.
 2. **Strict Deduplication:** Ensures at-most-once ingestion by leveraging a compound unique database index (`sourceId` + `eventId`), returning HTTP 200 with `deduplicated: true` for redundant submissions.
-3. **Durable Persistence:** Stores incoming events in MongoDB before acknowledging receipt to ensure zero data loss.
+3. **Durable Persistence:** Stores incoming events in MongoDB before acknowledging receipt to prevent data loss on crash.
 4. **Asynchronous Enqueueing:** Dispatches accepted events to a BullMQ Redis queue (`process-event`) using fail-fast producer semantics.
 5. **Schema Validation:** Evaluates payloads against active versioned JSON Schema definitions (Draft-07) using compiled Ajv validators.
 6. **Quarantine on Drift:** Identifies schema divergence without dropping payloads, isolates drifted events in a `quarantined` state, and computes a canonical `driftFingerprint`.
@@ -40,7 +40,7 @@ The demonstration demonstrates:
 3. Immediate quarantine of non-conforming events and real-time alert dispatch to the React dashboard over Server-Sent Events.
 4. Reviewing the structural diff and automated schema migration proposal in the dashboard interface.
 5. In-memory validation replay against quarantined events and transactional schema activation.
-6. Safe re-enqueueing and guaranteed delivery of recovered events.
+6. Safe re-enqueueing and at-least-once delivery of recovered events.
 
 ---
 
@@ -311,7 +311,7 @@ The project incorporates comprehensive unit, integration, chaos, and load testin
 
 ## Design Decisions and Trade-offs
 
-- **At-Least-Once Delivery**: Network partitions and downstream unresponsiveness can cause re-transmissions. Hookmend guarantees that no accepted event is lost, passing an `x-hookmend-event-id` header so downstream consumers can safely deduplicate.
+- **At-Least-Once Delivery**: Network partitions and downstream unresponsiveness can cause re-transmissions. Hookmend aims to deliver every accepted event, passing an `x-hookmend-event-id` header so downstream consumers can safely deduplicate.
 - **Quarantine Instead of Dropping**: Non-conforming payloads are never silently dropped or rejected with HTTP 4xx (which causes webhook senders to disable integrations). Instead, they are persisted and quarantined for operator triage.
 - **Human Approval Required**: AI suggestions and automated baseline repairs never auto-activate. An operator must review the candidate schema, inspect in-memory replay results, and approve activation.
 - **Redacted Structural AI Context**: To preserve data privacy, Google Gemini is provided only structural diffs (field names and inferred types). No payload values, secrets, or PII ever leave the gateway boundary.

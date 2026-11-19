@@ -8,3 +8,5 @@ coverage/
 dist/
 scratch/
 ci-logs/
+.local-notes/
+.fresh-clone/

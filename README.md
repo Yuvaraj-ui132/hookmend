@@ -3,7 +3,7 @@
 A resilient, domain-agnostic webhook gateway that absorbs external webhooks, validates payloads against versioned JSON Schemas, quarantines drifted payloads, and generates schema repair proposals for operator review.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-<!-- [![CI](https://github.com/Yuvaraj-ui132/hookmend/actions/workflows/ci.yml/badge.svg)](https://github.com/Yuvaraj-ui132/hookmend/actions/workflows/ci.yml) -->
+[![CI](https://github.com/Yuvaraj-ui132/hookmend/actions/workflows/ci.yml/badge.svg)](https://github.com/Yuvaraj-ui132/hookmend/actions/workflows/ci.yml)
 
 ---
 
@@ -342,7 +342,7 @@ The project incorporates comprehensive unit, integration, chaos, and load testin
 4. **Static Administrative Bearer Token**: Authentication uses a shared static bearer token rather than fine-grained role-based access control (RBAC) or multi-tenant JWTs.
 5. **DNS Rebinding Exposure**: Downstream destination URL validation checks private IP ranges at configuration time but does not pin DNS lookups during downstream HTTP dispatch.
 6. **Free-Tier Assumptions**: Defaults and connection pools are tailored for MongoDB Atlas M0 (500 max connections) and Gemini Free Tier rate limits.
-7. **CI Status**: Master branch CI verified locally across test suites; automated GitHub Actions workflow configured.
+7. **CI Status**: Master branch GitHub Actions CI verified passing.
 
 ### Current Dependency Advisories
 

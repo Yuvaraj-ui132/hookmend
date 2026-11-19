@@ -1,7 +1,7 @@
 # Hookmend Chaos Test Results
 
-Generated: 2026-10-25T17:33:28.102Z
-Commit: 993f09f
+Generated: 2026-10-25T18:19:23.249Z
+Commit: dc1bf74
 OS: Windows_NT 10.0.26300
 Node: v24.16.0
 CPU: Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz (8 cores)
@@ -14,10 +14,10 @@ STALE_JOB_THRESHOLD_MS (chaos): 10000ms
 
 | Scenario | Injected Fault | Assertion | Result | Recovery (s) |
 |---|---|---|---|---|
-| C1 | Worker SIGKILL mid-delivery (receiver slow 3s) | All 20 delivered, exactly 20 docs, 0 dead, receiver saw each id >= 1 | PASS - 20/20 delivered, 5 ids seen >1 (at-least-once), recovery 2838ms | 3 |
+| C1 | Worker SIGKILL mid-delivery (receiver slow 3s) | All 20 delivered, exactly 20 docs, 0 dead, receiver saw each id >= 1 | PASS - 20/20 delivered, 5 ids seen >1 (at-least-once), recovery 2848ms | 3 |
 | C2 | Redis stopped during ingest | All 20 HTTP 200 < 3000ms, 20 stored received, all delivered after Redis restart | PASS - 20/20 HTTP 200 while Redis down; all 20 delivered in 6s post-restart (11s total) | 6 |
 | C3 | Redis FLUSHALL while events in flight | All 30 delivered, 0 dead, 0 stuck in any non-terminal state | PASS - 30/30 delivered after Redis FLUSHALL; 0 duplicate deliveries (at-least-once); 3118ms total | 3 |
-| C4 | 100 concurrent requests with same delivery id | 1 doc, 1 not-dedup, 99 dedup, receiver saw exactly 1 request | PASS - 1 unique doc, 1 not-dedup, 99 dedup, receiver saw 1 request | 2 |
+| C4 | 100 concurrent requests with same delivery id | 1 doc, 1 not-dedup, 99 dedup, receiver saw exactly 1 request | PASS - 1 unique doc, 1 not-dedup, 99 dedup, receiver saw 1 request | 1 |
 | C5 | Downstream 503 for ~3s (shorter than retry window) | All 20 delivered, 0 dead | PASS - 20/20 delivered, 0 dead, attempt distribution: {"3":20} | 1 |
 | C6 | Downstream 503 until all events dead, then requeue | All go dead; requeue via admin API; all delivered | PASS - 20 events went dead; requeued 20; all 20 delivered after recovery | 10 |
 | C7 | Fake AI client always throws 429-style error | Proposal with aiUsed=false, aiFailureReason=AI_RATE_LIMITED; no crash; baseline schema exists | PASS - Proposal created with aiUsed=false, aiFailureReason=AI_RATE_LIMITED; baseline replay covered 1 events | 16 |

@@ -54,16 +54,11 @@ jobs:
     name: Integration Exit Tests + Chaos
     runs-on: ubuntu-latest
     needs: test
-    services:
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
+    # No GitHub Actions `services:` block for Redis.
+    # Redis is managed exclusively through infra/docker-compose.yml so the
+    # chaos script (which calls `docker compose stop/start redis`) targets
+    # the same container that CI uses.  Using two separate Redis containers
+    # caused `docker compose stop redis` to be a no-op in CI.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,6 +71,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Start Redis via Docker Compose
+        # Redis is started through Compose so the chaos script's
+        # `docker compose stop/start redis` targets this same container.
+        run: |
+          docker compose -f infra/docker-compose.yml up -d redis
+          echo "Redis container started via Docker Compose (hookmend-redis)"
 
       - name: Start MongoDB replica set
         run: |
@@ -103,13 +105,18 @@ jobs:
 
       - name: Wait for Redis to be healthy
         run: |
-          echo "Polling Redis..."
+          echo "Polling Redis (hookmend-redis via Docker Compose)..."
           timeout=60
           while ! node -e "const Redis = require('ioredis'); const r = new Redis('redis://localhost:6379', { maxRetriesPerRequest: 1, connectTimeout: 2000, retryStrategy: () => null, lazyConnect: true }); r.on('error', () => {}); r.connect().then(() => r.ping()).then(() => { r.disconnect(); process.exit(0); }).catch(() => process.exit(1));" >/dev/null 2>&1; do
+            if [ "$(docker inspect -f '{{.State.Running}}' hookmend-redis 2>/dev/null)" != "true" ]; then
+              echo "hookmend-redis container is not running"
+              docker logs hookmend-redis || true
+              exit 1
+            fi
             timeout=$((timeout - 1))
             if [ $timeout -le 0 ]; then
               echo "Redis did not become healthy in time"
-              docker logs $(docker ps -q --filter ancestor=redis:7) || true
+              docker logs hookmend-redis || true
               exit 1
             fi
             sleep 1
@@ -196,4 +203,4 @@ jobs:
         if: always()
         run: |
           docker rm -f mongo 2>/dev/null || true
-          docker compose -f infra/docker-compose.yml down -v || true
+          docker compose -f infra/docker-compose.yml down -v 2>/dev/null || true

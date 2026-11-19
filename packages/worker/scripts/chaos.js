@@ -193,22 +193,16 @@ async function waitWorkerReady(child, timeoutMs = 5000) {
 
 function dockerComposeRedis(action) {
   // action: 'stop' | 'start'
-  let result = spawnSync(
+  // Targets only the Hookmend Compose Redis service (hookmend-redis).
+  // No broad container scan: this must not accidentally affect unrelated Redis containers.
+  const result = spawnSync(
     'docker',
     ['compose', '-f', join(ROOT, 'infra', 'docker-compose.yml'), action, 'redis'],
     { encoding: 'utf8', timeout: 15000 }
   );
   if (result.status !== 0) {
-    // If docker compose didn't find the service (e.g. CI runner), find container by filter
-    const find = spawnSync(
-      'docker',
-      ['ps', '-q', action === 'start' ? '-a' : '', '--filter', 'ancestor=redis:7'].filter(Boolean),
-      { encoding: 'utf8', timeout: 5000 }
-    );
-    const containerId = (find.stdout || '').trim().split('\n')[0];
-    if (containerId) {
-      result = spawnSync('docker', [action, containerId], { encoding: 'utf8', timeout: 15000 });
-    }
+    const detail = (result.stderr || result.stdout || '').trim();
+    console.error(`[chaos] dockerComposeRedis('${action}') failed (exit ${result.status}): ${detail}`);
   }
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -218,23 +212,23 @@ async function pollRedisDown(redisUrl, timeoutMs = 30000, requiredConsecutiveFai
   let consecutiveFailures = 0;
   while (Date.now() - start < timeoutMs) {
     let pingOk = false;
-    let r;
+    const r = new Redis(redisUrl, {
+      family: 4,
+      connectTimeout: 500,
+      maxRetriesPerRequest: 0,
+      lazyConnect: true,
+      retryStrategy: () => null,
+    });
+    r.on('error', () => {});
     try {
-      r = new Redis(redisUrl, {
-        connectTimeout: 500,
-        maxRetriesPerRequest: 0,
-        enableOfflineQueue: false,
-        retryStrategy: () => null,
-      });
-      r.on('error', () => {});
+      await r.connect();
       const pong = await r.ping();
+      await r.quit().catch(() => {});
       if (pong === 'PONG') pingOk = true;
     } catch {
       pingOk = false;
     } finally {
-      if (r) {
-        r.disconnect();
-      }
+      r.disconnect();
     }
     if (!pingOk) {
       consecutiveFailures++;
@@ -560,13 +554,14 @@ async function printC2Diagnostics(err, { sentIds, firstSendAt, redisConfirmedDow
     const rDiag = new Redis(REDIS_URL, {
       connectTimeout: 1000,
       maxRetriesPerRequest: 0,
-      enableOfflineQueue: false,
+      lazyConnect: true,
       retryStrategy: () => null,
     });
     rDiag.on('error', () => {});
+    await rDiag.connect();
     const pong = await rDiag.ping();
     redisPingResult = pong;
-    rDiag.disconnect();
+    await rDiag.quit().catch(() => {});
   } catch (pingErr) {
     redisPingResult = `FAILED (${pingErr.message})`;
   }
@@ -592,9 +587,11 @@ async function scenarioC2() {
 
     // Stop Redis via docker compose
     console.log('[chaos] C2: stopping Redis via docker compose');
+    const redisShutdownInitiatedAt = Date.now();
     const stopResult = dockerComposeRedis('stop');
     if (stopResult.code !== 0) {
-      console.warn('[chaos] C2: docker compose stop returned non-zero; checking container directly');
+      const detail = (stopResult.stderr || stopResult.stdout || '').trim();
+      throw new Error(`[chaos] C2: docker compose stop redis failed (exit ${stopResult.code}): ${detail}`);
     }
 
     // SYNCHRONISATION: Poll ping until Redis is confirmed down before sending
@@ -604,7 +601,7 @@ async function scenarioC2() {
       throw new Error('Redis did not go down within 30s of stop command');
     }
     redisConfirmedDownAt = Date.now();
-    console.log('[chaos] C2: Redis confirmed down');
+    console.log(`[chaos] C2: Redis confirmed down (${redisConfirmedDownAt - redisShutdownInitiatedAt}ms after stop command)`);
 
     // Send 20 events while Redis is down - should get HTTP 200 each (fail-fast producer)
     const n = 20;
@@ -625,9 +622,18 @@ async function scenarioC2() {
     const totalStored = docsWhileDown.length;
     const deliveredWhileDown = docsWhileDown.filter(d => d.status === 'delivered').length;
 
+    // Fail immediately if any event was delivered while Redis is down (before restarting Redis or stopping worker)
+    if (deliveredWhileDown > 0) {
+      throw new Error(`Expected 0 events delivered while Redis is down, got ${deliveredWhileDown}`);
+    }
+
     // Start Redis again
     console.log('[chaos] C2: starting Redis via docker compose');
-    dockerComposeRedis('start');
+    const startResult = dockerComposeRedis('start');
+    if (startResult.code !== 0) {
+      const detail = (startResult.stderr || startResult.stdout || '').trim();
+      throw new Error(`[chaos] C2: docker compose start redis failed (exit ${startResult.code}): ${detail}`);
+    }
 
     const redisHealthy = await pollRedisHealth(REDIS_URL, 30000);
     if (!redisHealthy) throw new Error('Redis did not become healthy within 30s of restart');
